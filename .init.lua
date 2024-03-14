@@ -7,6 +7,10 @@ local unix = require "unix"
 -- this address is the only configuration "knob"; port can be specified as second argument. But that's it
 manager_address = ParseIp(arg[1] or "")
 
+function system(cmd)
+  Log(kLogInfo, "executing %s: %s" % {cmd, inspect(table.pack(os.execute(cmd)), {newline="", indent="  "})})
+end
+
 function pid_dir()
   if GetHostOs() ~= "WINDOWS" then
     return "/run"
@@ -19,19 +23,6 @@ function pid_dir()
   return "/C/Windows"
 end
 
-if manager_address == -1 then
-  if GetHostOs() == "WINDOWS" and arg[1] == "terminate" then
-    pid = Slurp("%s/redbean.pid" % {pid_dir()}) or "-1"
-    Log(kLogWarn, "Sending SIGINT to %s" % {pid})
-    unix.kill(tonumber(pid, 10), unix.SIGINT)
-    unix.exit(0)
-  end
-  Log(kLogFatal, "Malformed manager address provided as first argument: %s" % {arg[1] or ""})
-  unix.exit(1)
-elseif IsDaemon() and GetHostOs() == "WINDOWS" then  -- so it is possible to turn off first redbean by starting second instance with 'terminate' argument
-  ProgramPidPath("%s/redbean.pid" % {pid_dir()})
-end
-
 -- documented .com / .exe suffixing did not work
 function which(name)
   local path, msg = unix.commandv(GetHostOs() == "WINDOWS" and ("%s.exe" % {name}) or name)
@@ -42,6 +33,20 @@ function which(name)
     path = "\"%s\"" % {path}
   end
   return path
+end
+
+if manager_address == -1 then
+  if GetHostOs() == "WINDOWS" and arg[1] == "terminate" then
+    system("%s advfirewall firewall delete rule name=redbean_ping" % {which("netsh")})
+    pid = Slurp("%s/redbean.pid" % {pid_dir()}) or "-1"
+    Log(kLogWarn, "Sending SIGINT to %s" % {pid})
+    unix.kill(tonumber(pid, 10), unix.SIGINT)
+    unix.exit(0)
+  end
+  Log(kLogFatal, "Malformed manager address provided as first argument: %s" % {arg[1] or ""})
+  unix.exit(1)
+elseif IsDaemon() and GetHostOs() == "WINDOWS" then  -- so it is possible to turn off first redbean by starting second instance with 'terminate' argument
+  ProgramPidPath("%s/redbean.pid" % {pid_dir()})
 end
 
 wg = which("wg")
@@ -59,8 +64,8 @@ function serve_peers(r)
   end
   SetHeader("Content-Type", "text/plain")
   for line in fd:lines() do
-    local _, network, peer, privkey, endpoint, _, _, received = wg_show_pattern:search(line)
-    if privkey == "(none)" then
+    local _, network, peer, privkey, endpoint, allowed_ips, _, received = wg_show_pattern:search(line)
+    if received and privkey == "(none)" and allowed_ips ~= ("%s:%s" % {FormatIp(GetRemoteAddr()), select(2, GetRemoteAddr())}) then
       fm.render("peer", {peer = peer}) 
     end
   end
@@ -98,10 +103,6 @@ function serve_endpoint(r)
   return fm.serveError(404, "Peer not seen yet")()
 end
 
-function system(cmd)
-  Log(kLogInfo, "executing %s: %s" % {cmd, inspect(table.pack(os.execute(cmd)), {newline="", indent="  "})})
-end
-
 function fetch_endpoint(network, pubkey, endpoint)
   local url = fm.makeUrl("", {scheme="http", host=FormatIp(manager_address), port=arg[2] or "8080", path=fm.makePath("/endpoint/*pubkey", {pubkey=pubkey})})
   local status, headers, body = Fetch(url)
@@ -113,16 +114,27 @@ function fetch_endpoint(network, pubkey, endpoint)
     if headers["X-Client-Address"] == allowed_ips then
     elseif GetHostOs() == "WINDOWS" then
       system("%s add %s mask 255.255.255.255 %s" % {which("route"), allowed_ips, headers["X-Client-Address"]})
+      system("%s advfirewall firewall add rule name=redbean_ping protocol=icmpv4:8,any dir=in localip=%s action=allow" % {which("netsh"), headers["X-Client-Address"]})
+      return allowed_ips
     else
       for _, adapter in ipairs(unix.siocgifconf()) do
         if headers["X-Client-Address"] == FormatIp(adapter.ip) then
           system("%s route replace %s dev %s scope link" % {which("ip"), allowed_ips, adapter.name})
-          break
+          return allowed_ips
         end
       end
     end
+    return ""
   elseif status ~= 404 then
     Log(kLogWarn, "Fetch(%s) failed: %s, %s, %s" % {url, status or "none", headers or "", body or ""})
+  end
+end
+
+function ping(addresses)
+  addresses[""] = nil
+  local fmt = "%s %s" % {which("ping"), GetHostOs() == "WINDOWS" and "/n 3 /w 1000 %s" or "-n -c 3 -i 1 -W 1 %s"}
+  for address, _ in pairs(addresses) do
+    system(fmt % {address})
   end
 end
 
@@ -133,15 +145,16 @@ function every_minute()
     local cmd = "%s show interfaces" % {wg}
     local fd, msg = io.popen(cmd, "r")
     if not msg then
+      local ping_targets = {}
       for network in fd:lines() do
         network = network:gsub("\r", "")
         Fetch(fm.makeUrl("", {scheme="http", host=FormatIp(manager_address), port=arg[2] or "8080", path="favicon.ico"})) -- fails in Windows with interrupted syscall
         for pubkey in body:gmatch("([^\r\n]*)[\r\n]*") do
-          fetch_endpoint(network, pubkey, nil)
+          ping_targets[fetch_endpoint(network, pubkey, nil)] = true
         end
       end
       fd:close()
-      return
+      return ping(ping_targets)
     end
     Log(kLogWarn, "%s failed: %s" % {cmd, msg})
   end
@@ -150,13 +163,15 @@ function every_minute()
   if msg then
     return Log(kLogWarn, "%s failed: %s" % {cmd, msg})
   end
+  local ping_targets = {}
   for line in fd:lines() do
     local _, network, pubkey, privkey, endpoint, _, _, received = wg_show_pattern:search(line)
     if pubkey and "(none)" == privkey and endpoint then
-      fetch_endpoint(network, pubkey, endpoint)
+      ping_targets[fetch_endpoint(network, pubkey, endpoint)] = true
     end
   end
   fd:close()
+  ping(ping_targets)
 end
 
 for _, adapter in ipairs(unix.siocgifconf()) do
