@@ -65,7 +65,7 @@ function serve_peers(r)
   SetHeader("Content-Type", "text/plain")
   for line in fd:lines() do
     local _, network, peer, privkey, endpoint, allowed_ips, _, received = wg_show_pattern:search(line)
-    if received and privkey == "(none)" and allowed_ips ~= ("%s:%s" % {FormatIp(GetRemoteAddr()), select(2, GetRemoteAddr())}) then
+    if received ~= "0" and privkey == "(none)" and allowed_ips ~= ("%s:%s" % {FormatIp(GetRemoteAddr()), select(2, GetRemoteAddr())}) then
       fm.render("peer", {peer = peer}) 
     end
   end
@@ -106,8 +106,12 @@ end
 function fetch_endpoint(network, pubkey, endpoint)
   local url = fm.makeUrl("", {scheme="http", host=FormatIp(manager_address), port=arg[2] or "8080", path=fm.makePath("/endpoint/*pubkey", {pubkey=pubkey})})
   local status, headers, body = Fetch(url)
-  if body and endpoint == body then
+  if body and endpoint and endpoint == body:sub(1, #endpoint) then
     Log(kLogInfo, "Peer %s still at %s" % {pubkey, endpoint})
+    local allowed_ips = body:gsub(".* ([0-9.]+)/32", "%1")
+    if headers["X-Client-Address"] ~= allowed_ips then
+      return allowed_ips
+    end
   elseif status == 200 and body and not body:find("(none)") then
     system("%s set %s peer %s persistent-keepalive 13 endpoint %s" % {wg, network, pubkey, body})
     local allowed_ips = body:gsub(".* ([0-9.]+)/32", "%1")
@@ -124,10 +128,10 @@ function fetch_endpoint(network, pubkey, endpoint)
         end
       end
     end
-    return ""
   elseif status ~= 404 then
     Log(kLogWarn, "Fetch(%s) failed: %s, %s, %s" % {url, status or "none", headers or "", body or ""})
   end
+  return ""
 end
 
 function ping(addresses)
