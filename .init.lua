@@ -7,18 +7,29 @@ local unix = require "unix"
 -- this address is the only configuration "knob"; port can be specified as second argument. But that's it
 manager_address = ParseIp(arg[1] or "")
 
-NEXT = 0
-MESSAGES = 1 * 8
-MAX_MESSAGES = 128
-MESSAGE_SIZE = 512
-log_buffer = unix.mapshared(MESSAGES + MAX_MESSAGES * MESSAGE_SIZE)
+log_buffer_size = 64 * 1024
+log_buffer_words = log_buffer_size / 8
+log_buffer = unix.mapshared(log_buffer_size + 8) -- +8 is word where ever-increasing logical offset is tracked (reads/writes via modulo)
 
 function log(level, msg)
   Log(level, msg)
-  local next = log_buffer:load(NEXT)
-  log_buffer:write(MESSAGES + next * MESSAGE_SIZE, EncodeJson({event=tostring(level), data="<li>%s</li>" % {msg}}))
-  log_buffer:store(NEXT, (next + 1) % MAX_MESSAGES)
-  log_buffer:wake(NEXT)
+  local json = "%s\0" % {EncodeJson({event=tostring(level), data="<li>%s</li>" % {msg}})}
+  if #json > log_buffer_size then
+    local mark = "(truncated)"
+    msg = msg:sub(1, #msg - (#json - log_buffer_size) - #mark)
+    json = "%s\0" % {EncodeJson({event=tostring(level), data="<li>%s%s</li>" % {msg, mark}})}
+  end
+  local count = #json
+  local offset = log_buffer:load(log_buffer_words)
+  local pos = offset % log_buffer_size
+  if #json > log_buffer_size - pos then
+    local suffix = json:sub(1 + log_buffer_size - pos)
+    log_buffer:write(0, suffix, #suffix)
+    count = log_buffer_size - pos
+  end
+  log_buffer:write(pos, json, count)
+  log_buffer:store(log_buffer_words, offset + #json)
+  log_buffer:wake(log_buffer_words)
 end
 
 function system(cmd)
@@ -71,18 +82,21 @@ SP = "[[:space:]]+"
 wg_show_pattern = re.compile("(%s)%s(%s)%s(%s)%s(%s)%s(%s)(%s%s%s(%s)%s.*)?" % {NO_SP, SP, NO_SP, SP, NO_SP, SP, NO_SP, SP, NO_SP, SP, NO_SP, SP, NO_SP, SP})
 
 function logread(r)
-  previous_next = r.session.previous_next or 0
-  local errno = select(2, log_buffer:wait(NEXT, previous_next))
-  local next = log_buffer:load(NEXT)
-  if previous_next == next then
+  previous_position = r.session.log_position or 0
+  local errno = select(2, log_buffer:wait(log_buffer_words, previous_position))
+  r.session.log_position = log_buffer:load(log_buffer_words)
+  if previous_position == r.session.log_position then
     return "", errno
-  elseif previous_next < next then
-    messages = log_buffer:read(MESSAGES + previous_next * MESSAGE_SIZE, (next - previous_next) * MESSAGE_SIZE)
-  else
-    messages = log_buffer:read(MESSAGES + previous_next * MESSAGE_SIZE, (MAX_MESSAGES - previous_next) * MESSAGE_SIZE)
-    messages = messages .. log_buffer:read(MESSAGES, next * MESSAGE_SIZE)
   end
-  r.session.previous_next = next
+  previous_position = previous_position % log_buffer_size
+  end_position = r.session.log_position % log_buffer_size
+  if end_position > previous_position then
+   return log_buffer:read(previous_position, end_position - previous_position), errno
+  end
+  messages = log_buffer:read(previous_position, log_buffer_size - previous_position)
+  if end_position > 0 then
+    messages = messages .. log_buffer:read(0, end_position)
+  end
   return messages, errno
 end
 
@@ -224,6 +238,7 @@ function every_minute()
   for line in fd:lines() do
     local _, network, pubkey, privkey, endpoint, _, _, received = wg_show_pattern:search(line)
     if pubkey and "(none)" == privkey and endpoint then
+      log("Received %s from %s" % {received, endpoint})
       ping_targets[fetch_endpoint(network, pubkey, endpoint)] = true
     end
   end
