@@ -1,6 +1,7 @@
 -- https://www.jordanwhited.com/posts/wireguard-endpoint-discovery-nat-traversal/
 local fm = require "fullmoon"
 local inspect = require "inspect"
+local lines = require "lines"
 local log = require "log"
 local re = require "re"
 local unix = require "unix"
@@ -104,6 +105,14 @@ function serve_endpoint(r)
   return fm.serveError(404, "Peer not seen yet")()
 end
 
+function log_transfers(network, pubkey)
+  for _, line in ipairs(lines("%s show %s transfer" % {wg, network})) do
+    if line:find(pubkey) then
+      log(kLogInfo, "%s bytes sent" % {line:sub(1 + #pubkey + 1):gsub("%s", " bytes received, ", 1)})
+    end
+  end
+end
+
 function fetch_endpoint(network, pubkey, endpoint)
   local url = fm.makeUrl("", {scheme="http", host=FormatIp(manager_address), port=arg[2] or "8080", path=fm.makePath("/endpoint/*pubkey", {pubkey=pubkey})})
   local status, headers, body = Fetch(url)
@@ -120,24 +129,14 @@ function fetch_endpoint(network, pubkey, endpoint)
       system("%s set %s peer %s persistent-keepalive 13 endpoint %s" % {wg, network, pubkey, body})
       system("%s add %s mask 255.255.255.255 %s" % {which("route"), allowed_ips, headers["X-Client-Address"]})
       system("%s advfirewall firewall add rule name=redbean_ping protocol=icmpv4:8,any dir=in localip=%s action=allow" % {which("netsh"), headers["X-Client-Address"]})
+      log_transfers(network, pubkey)
       return allowed_ips
     else
       for _, adapter in ipairs(unix.siocgifconf()) do
         if headers["X-Client-Address"] == FormatIp(adapter.ip) then
           system("%s set %s peer %s persistent-keepalive 13 endpoint %s" % {wg, network, pubkey, body})
           system("%s route replace %s dev %s scope link" % {which("ip"), allowed_ips, adapter.name})
-          cmd = "%s show %s transfer" % {wg, network}
-          local fd, msg = io.popen(cmd, "r")
-          if msg then
-            log(kLogWarn, "%s failed: %s" % {cmd, msg})
-            return allowed_ips
-          end
-          for line in fd:lines() do
-            if line:find(pubkey) then
-              log(kLogInfo, "%s bytes sent" % {line:sub(1 + #pubkey + 1):gsub("%s", " bytes received, ", 1)})
-            end
-          end
-          fd:close()
+          log_transfers(network, pubkey)
           return allowed_ips
         end
       end
@@ -152,7 +151,9 @@ function ping(addresses)
   addresses[""] = nil
   local fmt = "%s %s" % {which("ping"), GetHostOs() == "WINDOWS" and "/n 3 /w 1000 %s" or "-n -c 3 -i 1 -W 1 %s"}
   for address, _ in pairs(addresses) do
-    system(fmt % {address})
+    for _, line in ipairs(lines(fmt % {address})) do
+      log(kLogInfo, line)
+    end
   end
 end
 
