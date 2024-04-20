@@ -1,36 +1,12 @@
 -- https://www.jordanwhited.com/posts/wireguard-endpoint-discovery-nat-traversal/
 local fm = require "fullmoon"
 local inspect = require "inspect"
+local log = require "log"
 local re = require "re"
 local unix = require "unix"
 
 -- this address is the only configuration "knob"; port can be specified as second argument. But that's it
 manager_address = ParseIp(arg[1] or "")
-
-log_buffer_size = 64 * 1024
-log_buffer_words = log_buffer_size / 8
-log_buffer = unix.mapshared(log_buffer_size + 8) -- +8 is word where ever-increasing logical offset is tracked (reads/writes via modulo)
-
-function log(level, msg)
-  Log(level, msg)
-  local json = "%s\0" % {EncodeJson({event=tostring(level), data="<li>%s</li>" % {msg}})}
-  if #json > log_buffer_size then
-    local mark = "(truncated)"
-    msg = msg:sub(1, #msg - (#json - log_buffer_size) - #mark)
-    json = "%s\0" % {EncodeJson({event=tostring(level), data="<li>%s%s</li>" % {msg, mark}})}
-  end
-  local count = #json
-  local offset = log_buffer:load(log_buffer_words)
-  local pos = offset % log_buffer_size
-  if #json > log_buffer_size - pos then
-    local suffix = json:sub(1 + log_buffer_size - pos)
-    log_buffer:write(0, suffix, #suffix)
-    count = log_buffer_size - pos
-  end
-  log_buffer:write(pos, json, count)
-  log_buffer:store(log_buffer_words, offset + #json)
-  log_buffer:wake(log_buffer_words)
-end
 
 function system(cmd)
   log(kLogInfo, "executing %s: %s" % {cmd, inspect(table.pack(os.execute(cmd)), {newline="", indent="  "})})
@@ -80,47 +56,6 @@ wg_show_all_dump = "%s show all dump" % {wg}
 NO_SP = "[^[:space:]]+"
 SP = "[[:space:]]+"
 wg_show_pattern = re.compile("(%s)%s(%s)%s(%s)%s(%s)%s(%s)(%s%s%s(%s)%s.*)?" % {NO_SP, SP, NO_SP, SP, NO_SP, SP, NO_SP, SP, NO_SP, SP, NO_SP, SP, NO_SP, SP})
-
-function logread(r)
-  previous_position = r.session.log_position or 0
-  local errno = select(2, log_buffer:wait(log_buffer_words, previous_position))
-  r.session.log_position = log_buffer:load(log_buffer_words)
-  if previous_position == r.session.log_position then
-    return "", errno
-  end
-  previous_position = previous_position % log_buffer_size
-  end_position = r.session.log_position % log_buffer_size
-  if end_position > previous_position then
-   return log_buffer:read(previous_position, end_position - previous_position), errno
-  end
-  messages = log_buffer:read(previous_position, log_buffer_size - previous_position)
-  if end_position > 0 then
-    messages = messages .. log_buffer:read(0, end_position)
-  end
-  return messages, errno
-end
-
-function serve_sse(r)
-  if r.session.sse == "done" then
-    r.session.sse = nil
-    fm.logInfo("Stop SSE processing")
-    return fm.serveContent("sse", {})
-  end
-  r.session.sse = "done"
-  fm.streamContent("sse", {retry=5000})
-  repeat
-    local messages, errno = logread(r)
-    for msg in messages:gmatch("([^\0]+)\0+") do
-      local json, err = DecodeJson(msg)
-      if err then
-        Log(kLogWarn, "Failed to decode '%s': '%s'" % {inspect(msg), err})
-      elseif json then
-        fm.streamContent("sse", json)
-      end
-    end
-  until errno and errno:errno() == unix.EINTR
-  return fm.serveContent("sse", {})
-end
 
 function serve_peers(r)
   local fd, msg = io.popen(wg_show_all_dump, "r")
@@ -191,6 +126,18 @@ function fetch_endpoint(network, pubkey, endpoint)
         if headers["X-Client-Address"] == FormatIp(adapter.ip) then
           system("%s set %s peer %s persistent-keepalive 13 endpoint %s" % {wg, network, pubkey, body})
           system("%s route replace %s dev %s scope link" % {which("ip"), allowed_ips, adapter.name})
+          cmd = "%s show %s transfer" % {wg, network}
+          local fd, msg = io.popen(cmd, "r")
+          if msg then
+            log(kLogWarn, "%s failed: %s" % {cmd, msg})
+            return allowed_ips
+          end
+          for line in fd:lines() do
+            if line:find(pubkey) then
+              log(kLogInfo, "%s bytes sent" % {line:sub(1 + #pubkey + 1):gsub("%s", " bytes received, ", 1)})
+            end
+          end
+          fd:close()
           return allowed_ips
         end
       end
@@ -260,7 +207,7 @@ if every_minute then
   fm.setSchedule("* * * * *", every_minute)
 end
 
-fm.setRoute("/sse", serve_sse)
+fm.setRoute("/sse", log.serve_sse)
 fm.setRoute("/*", function() return [[
 <!DOCTYPE html><html><head>
 <script src="https://unpkg.com/htmx.org@1.9.11" ></script>
