@@ -59,29 +59,20 @@ SP = "[[:space:]]+"
 wg_show_pattern = re.compile("(%s)%s(%s)%s(%s)%s(%s)%s(%s)(%s%s%s(%s)%s.*)?" % {NO_SP, SP, NO_SP, SP, NO_SP, SP, NO_SP, SP, NO_SP, SP, NO_SP, SP, NO_SP, SP})
 
 function serve_peers(r)
-  local fd, msg = io.popen(wg_show_all_dump, "r")
-  if msg then
-    log(kLogWarn, "%s failed: %s" % {cmd, msg})
-    return fm.serveError(500, msg)()
-  end
   SetHeader("Content-Type", "text/plain")
-  for line in fd:lines() do
+  output = lines(wg_show_all_dump)
+  for _, line in ipairs(output) do
     local _, network, peer, privkey, endpoint, allowed_ips, _, received = wg_show_pattern:search(line)
     if received ~= "0" and privkey == "(none)" and allowed_ips ~= ("%s:%s" % {FormatIp(GetRemoteAddr()), select(2, GetRemoteAddr())}) then
       fm.render("peer", {peer = peer}) 
     end
   end
-  fd:close()
-  return true
+  return not output.failure or fm.serveError(500, output.failure)()
 end
 
 function serve_endpoint(r)
-  local fd, msg = io.popen(wg_show_all_dump, "r")
-  if msg then
-    log(kLogWarn, "%s failed: %s" % {cmd, msg})
-    return fm.serveError(500, msg)()
-  end
-  for line in fd:lines() do
+  output = lines(wg_show_all_dump)
+  for _, line in ipairs(output) do
     local _, network, peer, pubkey, endpoint, allowed_ips, _, received = wg_show_pattern:search(line)
     if endpoint and not endpoint:find("(none)") and ({[peer]=true, [pubkey]=true})[r.params.pubkey] then
       fd:close()
@@ -101,8 +92,7 @@ function serve_endpoint(r)
       return endpoint
     end
   end
-  fd:close()
-  return fm.serveError(404, "Peer not seen yet")()
+  return fm.serveError(output.failure and 500 or 404, output.failure or "Peer not seen yet")()
 end
 
 function log_transfers(network, pubkey)
@@ -158,39 +148,26 @@ function ping(addresses)
 end
 
 function every_minute()
+  local ping_targets = {}
   local url = fm.makeUrl("", {scheme="http", host=FormatIp(manager_address), port=arg[2] or "8080", path="peers"})
   local status, error, body = Fetch(url)
   if body and #body > 2 then
-    local cmd = "%s show interfaces" % {wg}
-    local fd, msg = io.popen(cmd, "r")
-    if not msg then
-      local ping_targets = {}
-      for network in fd:lines() do
-        network = network:gsub("\r", "")
-        Fetch(fm.makeUrl("", {scheme="http", host=FormatIp(manager_address), port=arg[2] or "8080", path="favicon.ico"})) -- fails in Windows with interrupted syscall
-        for pubkey in body:gmatch("([^\r\n]*)[\r\n]*") do
-          ping_targets[fetch_endpoint(network, pubkey, nil)] = true
-        end
+    for _, network in ipairs(lines("%s show interfaces" % {wg})) do
+      Fetch(fm.makeUrl("", {scheme="http", host=FormatIp(manager_address), port=arg[2] or "8080", path="favicon.ico"})) -- fails in Windows with interrupted syscall
+      for pubkey in body:gmatch("([^\r\n]*)[\r\n]*") do
+        ping_targets[fetch_endpoint(network, pubkey, nil)] = true
       end
-      fd:close()
-      return ping(ping_targets)
     end
-    log(kLogWarn, "%s failed: %s" % {cmd, msg})
+    return ping(ping_targets)
   end
   log(kLogWarn, "Fetch(%s) failed: %s, %s, %s" % {url, status or "none", error or "", body or ""})
-  local fd, msg = io.popen(wg_show_all_dump, "r")
-  if msg then
-    return log(kLogWarn, "%s failed: %s" % {cmd, msg})
-  end
-  local ping_targets = {}
-  for line in fd:lines() do
+  for _, line in ipairs(lines(wg_show_all_dump)) do
     local _, network, pubkey, privkey, endpoint, _, _, received = wg_show_pattern:search(line)
     if pubkey and "(none)" == privkey and endpoint then
       log("Received %s from %s" % {received, endpoint})
       ping_targets[fetch_endpoint(network, pubkey, endpoint)] = true
     end
   end
-  fd:close()
   ping(ping_targets)
 end
 

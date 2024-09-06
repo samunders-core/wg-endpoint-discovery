@@ -11,7 +11,7 @@ function lines.popen(cmd)
   end
   result = {}
   for line in fd:lines() do
-    table.insert(result, line)
+    table.insert(result, line:gsub("\r", ""))
   end
   fd:close()
   log(kLogInfo, "%s success: %s lines" % {cmd, #result})

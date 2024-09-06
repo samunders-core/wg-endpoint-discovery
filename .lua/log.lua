@@ -2,6 +2,7 @@ log = {}
 log._DESCRIPTION = 'log pipe to browser over SSE'
 
 local fm = require "fullmoon"
+local inspect = require "inspect"
 local unix = require "unix"
 
 local log_buffer_size = 64 * 1024
@@ -27,28 +28,6 @@ function log.read(r)
   return messages, errno
 end
 
-function log.serve_sse(r)
-  if r.session.sse == "done" then
-    r.session.sse = nil
-    fm.logInfo("Stop SSE processing")
-    return fm.serveContent("sse", {})
-  end
-  r.session.sse = "done"
-  fm.streamContent("sse", {retry=5000})
-  repeat
-    local messages, errno = log.read(r)
-    for msg in messages:gmatch("([^\0]+)\0+") do
-      local json, err = DecodeJson(msg)
-      if err then
-        Log(kLogWarn, "Failed to decode '%s': '%s'" % {inspect(msg), err})
-      elseif json then
-        fm.streamContent("sse", json)
-      end
-    end
-  until errno and errno:errno() == unix.EINTR
-  return fm.serveContent("sse", {})
-end
-
 function log.log(level, msg)
   Log(level, msg)
   local json = "%s\0" % {EncodeJson({event=tostring(level), data="<li>%s</li>" % {msg}})}
@@ -68,6 +47,28 @@ function log.log(level, msg)
   log_buffer:write(pos, json, count)
   log_buffer:store(log_buffer_words, offset + #json)
   log_buffer:wake(log_buffer_words)
+end
+
+function log.serve_sse(r)
+  if r.session.sse == "done" then
+    r.session.sse = nil
+    fm.logInfo("Stop SSE processing")
+    return fm.serveContent("sse", {})
+  end
+  r.session.sse = "done"
+  fm.streamContent("sse", {retry=5000})
+  repeat
+    local messages, errno = log.read(r)
+    for msg in messages:gmatch("([^\0]+)\0+") do
+      local json, err = DecodeJson(msg)
+      if err then
+        log.log(kLogWarn, "Failed to decode '%s': '%s'" % {inspect(msg), err})
+      elseif json then
+        fm.streamContent("sse", json)
+      end
+    end
+  until errno and errno:errno() == unix.EINTR
+  return fm.serveContent("sse", {})
 end
 
 setmetatable(log, {
