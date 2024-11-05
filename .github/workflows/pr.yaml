@@ -1,7 +1,7 @@
 on: push
 jobs:
   build:
-    name: Build Cosmopolitan
+    name: Build Redbean
     runs-on: ubuntu-latest
     permissions:
       contents: write
@@ -20,7 +20,11 @@ jobs:
       run: |
         A="${{ fromJson(steps.download.outputs.downloaded_files)[0] }}"
         tar xzf "$A"
-        (cd "${A%.tar.gz}" && make -j2)
+        (
+          cd "${A%.tar.gz}"
+          sed -i -re '/DOWNLOAD.*download-cosmocc.sh/d' Makefile
+          build/bootstrap/make -j2 o//tool/net/redbean
+        )
         A="${A%.tar.gz}/tool/net/redbean.com"
         zip "$A" .init.lua .lua/*.lua
         echo "redbean=$A" >> "$GITHUB_OUTPUT"
