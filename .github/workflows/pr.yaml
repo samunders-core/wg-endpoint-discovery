@@ -23,6 +23,7 @@ jobs:
         (
           cd "${A%.tar.gz}"
           sed -i -re '/DOWNLOAD.*download-cosmocc.sh/d' Makefile
+          "ape/apeinstall.sh"
           build/bootstrap/make -j2 o//tool/net/redbean
         )
         A="${A%.tar.gz}/tool/net/redbean.com"
