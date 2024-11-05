@@ -16,12 +16,16 @@ jobs:
         repository: jart/cosmopolitan
         tag: 3.9.6
         fileName: cosmopolitan-*.tar.gz
-    - run: |
-        tar xzf ${{ fromJson(steps.download.outputs.downloaded_files)[0] }}
-        V=0 make -j2
-        zip tool/net/redbean.com .init.lua .lua/*.lua
+    - id: build
+      run: |
+        A="${{ fromJson(steps.download.outputs.downloaded_files)[0] }}"
+        tar xzf "$A"
+        (cd "${A%-*}" && make -j2)
+        A="${A%-*}/tool/net/redbean.com"
+        zip "$A" .init.lua .lua/*.lua
+        echo "redbean=$A" >> "$GITHUB_OUTPUT"
     - uses: ncipollo/release-action@v1
       with:
-        artifacts: tool/net/redbean.com
+        artifacts: ${{ steps.build.outputs.redbean }}
         allowUpdates: "true"
         makeLatest: "true"
