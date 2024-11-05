@@ -1,0 +1,27 @@
+on: push
+jobs:
+  build:
+    name: Build Cosmopolitan
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+    - uses: actions/checkout@v4
+    - uses: bjia56/setup-cosmocc@main
+      with:
+        version: 3.9.6
+    - uses: robinraju/release-downloader@v1
+      id: download
+      with:
+        repository: jart/cosmopolitan
+        tag: 3.9.6
+        fileName: cosmopolitan-*.tar.gz
+    - run: |
+        tar xzf ${{ fromJson(steps.download.outputs.downloaded_files)[0] }}
+        V=0 make -j2
+        zip tool/net/redbean.com .init.lua .lua/*.lua
+    - uses: ncipollo/release-action@v1
+      with:
+        artifacts: tool/net/redbean.com
+        allowUpdates: "true"
+        makeLatest: "true"
