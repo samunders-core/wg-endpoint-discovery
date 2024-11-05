@@ -20,8 +20,8 @@ jobs:
       run: |
         A="${{ fromJson(steps.download.outputs.downloaded_files)[0] }}"
         tar xzf "$A"
-        (cd "${A%-*}" && make -j2)
-        A="${A%-*}/tool/net/redbean.com"
+        (cd "${A%.tar.gz}" && make -j2)
+        A="${A%.tar.gz}/tool/net/redbean.com"
         zip "$A" .init.lua .lua/*.lua
         echo "redbean=$A" >> "$GITHUB_OUTPUT"
     - uses: ncipollo/release-action@v1
