@@ -23,7 +23,7 @@ jobs:
         (
           cd "${A%.tar.gz}"
           sed -i -re '/DOWNLOAD.*download-cosmocc.sh/d' Makefile
-          ln -s /home/runner/work/_temp/cosmocc-${{ steps.download.outputs.tag }}/bin/make build/bootstrap/make
+          ln -s /home/runner/work/_temp/cosmocc-${{ steps.download.outputs.tag_name }}/bin/make build/bootstrap/make
           build/bootstrap/make -j2 o//tool/net/redbean
         )
         A="${A%.tar.gz}/tool/net/redbean.com"
