@@ -27,8 +27,7 @@ jobs:
         A="${A%.tar.gz}/tool/net/redbean.com"
         zip "$A" .init.lua .lua/*.lua
         echo "redbean=$A" >> "$GITHUB_OUTPUT"
-    - uses: ncipollo/release-action@v1
+    - uses: actions/upload-artifact@v4
       with:
-        artifacts: ${{ steps.build.outputs.redbean }}
-        allowUpdates: "true"
-        makeLatest: "true"
+        name: dist-without-markdown
+        path: ${{ steps.build.outputs.redbean }}
