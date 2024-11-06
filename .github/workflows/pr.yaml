@@ -7,9 +7,6 @@ jobs:
       contents: write
     steps:
     - uses: actions/checkout@v4
-    - uses: bjia56/setup-cosmocc@main
-      with:
-        version: 3.9.6
     - uses: robinraju/release-downloader@v1
       id: download
       with:
@@ -22,7 +19,9 @@ jobs:
         tar xzf "$A"
         (
           cd "${A%.tar.gz}"
-          sed -i -re '/DOWNLOAD.*download-cosmocc.sh/d' Makefile
+          ape/apeinstall.sh
+          # `wg` invocation fails without capabilities
+          sed -i -z -re 'N; s|if [(]IsLinux[(][)][)].*disable weird linux capabilities|if (0) {|; P; D' tool/net/redbean.c
           make -j2 o//tool/net/redbean
         )
         A="${A%.tar.gz}/tool/net/redbean.com"
