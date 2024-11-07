@@ -22,11 +22,10 @@ jobs:
           ape/apeinstall.sh
           # `wg` invocation fails without capabilities
           sed -i -z -re 'N; s|if [(]IsLinux[(][)][)].*disable weird linux capabilities|if (0) {|; P; D' tool/net/redbean.c
-          make -j2 o//tool/net/redbean
+          build/bootstrap/make -j2 o//tool/net/redbean
         )
         A="${A%.tar.gz}/tool/net/redbean.com"
-        zip "${A%.com}" .init.lua .lua/*.lua
-        mv "${A%.com}" "$A"
+        zip "$A" .init.lua .lua/*.lua
         echo "redbean=$A" >> "$GITHUB_OUTPUT"
     - uses: actions/upload-artifact@v4
       with:
