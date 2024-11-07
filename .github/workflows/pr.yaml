@@ -11,7 +11,7 @@ jobs:
       id: download
       with:
         repository: jart/cosmopolitan
-        tag: 3.9.6
+        tag: 3.9.2  # 3.9.6 failed to build with line 8: build/bootstrap/make: No such file or directory
         fileName: cosmopolitan-*.tar.gz
     - id: build
       run: |
