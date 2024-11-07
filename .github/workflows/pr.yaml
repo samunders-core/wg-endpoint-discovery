@@ -28,8 +28,8 @@ jobs:
         zip "$A" .init.lua .lua/*.lua
         echo "redbean=$A" >> "$GITHUB_OUTPUT"
         # test
-        chmod +x ${{ steps.build.outputs.redbean }}
-        ${{ steps.build.outputs.redbean }} -vv < /dev/null |\
+        chmod +x "$A"
+        "$A" -vv < /dev/null |\
           awk '{print} /:redbean] [(]srvr[)] listen http:\/\/127.0.0.1:8080/{f=1} END{exit 1-f}'
     - uses: actions/upload-artifact@v4
       with:
