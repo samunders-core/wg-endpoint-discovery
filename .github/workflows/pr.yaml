@@ -30,7 +30,7 @@ jobs:
     - name: test linux
       run: |
         ${{ steps.build.outputs.redbean }} -vv < /dev/null |\
-        awk '/:redbean] [(]srvr[)] listen http://127.0.0.1:8080/{f=1} END{exit 1-f}'
+        awk '{print} /:redbean] [(]srvr[)] listen http:\/\/127.0.0.1:8080/{f=1} END{exit 1-f}'
     - uses: actions/upload-artifact@v4
       with:
         name: redbean.com
