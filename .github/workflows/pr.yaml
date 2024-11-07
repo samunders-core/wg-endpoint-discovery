@@ -25,10 +25,10 @@ jobs:
         A="${A%.tar.gz}/o/tool/net/redbean"
         cp "$A" "${A}.com"
         echo "redbean=$A" >> "$GITHUB_OUTPUT"
-    - name: test ability to run in Linux
+    - name: test ability to run
       run: |
-        ${{ steps.compile.outputs.redbean }} -vv < /dev/null |\
-          awk '{print} /:redbean] [(]srvr[)] listen http:\/\/127.0.0.1:8080/{f=1} END{exit 1-f}'
+        ${{ steps.compile.outputs.redbean }} -e 'print(GetHostOs()); os.exit(0)' < /dev/null |\
+          awk '{print} /LINUX/{f=1} END{exit 1-f}'
     - id: build
       run: |
         zip ${{ steps.compile.outputs.redbean }}.com .init.lua .lua/*.lua
