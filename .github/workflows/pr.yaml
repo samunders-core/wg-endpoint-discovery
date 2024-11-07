@@ -14,7 +14,6 @@ jobs:
         tag: 3.8.0  # 3.9.0+ fails to build with line 8: build/bootstrap/make: No such file or directory
         fileName: cosmopolitan-*.tar.gz
     - id: build
-      shell: bash
       run: |
         A="${{ fromJson(steps.download.outputs.downloaded_files)[0] }}"
         tar xzf "$A"
@@ -29,7 +28,7 @@ jobs:
         zip "$A" .init.lua .lua/*.lua
         echo "redbean=$A" >> "$GITHUB_OUTPUT"
         # test
-        chmod +x "$A"
+        xxd "$A" | head -4
         "$A" -vv < /dev/null |\
           awk '{print} /:redbean] [(]srvr[)] listen http:\/\/127.0.0.1:8080/{f=1} END{exit 1-f}'
     - uses: actions/upload-artifact@v4
