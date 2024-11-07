@@ -21,7 +21,7 @@ jobs:
         ape/apeinstall.sh
         # `wg` invocation fails without capabilities
         sed -i -z -re 'N; s|if [(]IsLinux[(][)][)].*disable weird linux capabilities|if (0) {|; P; D' tool/net/redbean.c
-        build/bootstrap/make -j2 o//tool/net/redbean
+        make -j2 o//tool/net/redbean
         A="${A%.tar.gz}/o/tool/net/redbean"
         cp "$A" "${A}.com"
         echo "redbean=$A" >> "$GITHUB_OUTPUT"
