@@ -31,8 +31,9 @@ jobs:
           awk '{print} /LINUX/{f=1} END{exit 1-f}'
     - id: build
       run: |
-        zip ${{ steps.compile.outputs.redbean }}.com .init.lua .lua/*.lua
-        echo "redbean=$A.com" >> "$GITHUB_OUTPUT"
+        A="${{ steps.compile.outputs.redbean }}.com"
+        zip "$A" .init.lua .lua/*.lua
+        echo "redbean=$A" >> "$GITHUB_OUTPUT"
     - uses: actions/upload-artifact@v4
       with:
         name: redbean.com
