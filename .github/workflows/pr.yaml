@@ -24,13 +24,13 @@ jobs:
           sed -i -z -re 'N; s|if [(]IsLinux[(][)][)].*disable weird linux capabilities|if (0) {|; P; D' tool/net/redbean.c
           build/bootstrap/make -j2 o//tool/net/redbean
         )
-        A="${A%.tar.gz}/tool/net/redbean.com"
+        A="${A%.tar.gz}/o/tool/net/redbean.com"
+        cp "${A%.com}" "$A"
         zip "$A" .init.lua .lua/*.lua
         echo "redbean=$A" >> "$GITHUB_OUTPUT"
-        # test
-        ls -lA "${A%/*}"
-        # xxd "$A" | head -4
-        "$A" -vv < /dev/null |\
+    - name: test ability to run in Linux
+      run: |
+        ${{ steps.build.outputs.redbean }} -vv < /dev/null |\
           awk '{print} /:redbean] [(]srvr[)] listen http:\/\/127.0.0.1:8080/{f=1} END{exit 1-f}'
     - uses: actions/upload-artifact@v4
       with:
