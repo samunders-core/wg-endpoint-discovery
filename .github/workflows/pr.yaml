@@ -1,7 +1,7 @@
 on: push
 jobs:
   build:
-    name: Build Redbean
+    name: Build redbean.com
     runs-on: ubuntu-latest
     permissions:
       contents: write
@@ -27,8 +27,7 @@ jobs:
         A="${A%.tar.gz}/tool/net/redbean.com"
         zip "$A" .init.lua .lua/*.lua
         echo "redbean=$A" >> "$GITHUB_OUTPUT"
-    - name: test linux
-      run: |
+        # test
         chmod +x ${{ steps.build.outputs.redbean }}
         ${{ steps.build.outputs.redbean }} -vv < /dev/null |\
           awk '{print} /:redbean] [(]srvr[)] listen http:\/\/127.0.0.1:8080/{f=1} END{exit 1-f}'
