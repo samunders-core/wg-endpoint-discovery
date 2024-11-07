@@ -13,25 +13,26 @@ jobs:
         repository: jart/cosmopolitan
         tag: 3.8.0  # 3.9.0+ fails to build with line 8: build/bootstrap/make: No such file or directory
         fileName: cosmopolitan-*.tar.gz
-    - id: build
+    - id: compile
       run: |
         A="${{ fromJson(steps.download.outputs.downloaded_files)[0] }}"
         tar xzf "$A"
-        (
-          cd "${A%.tar.gz}"
-          ape/apeinstall.sh
-          # `wg` invocation fails without capabilities
-          sed -i -z -re 'N; s|if [(]IsLinux[(][)][)].*disable weird linux capabilities|if (0) {|; P; D' tool/net/redbean.c
-          build/bootstrap/make -j2 o//tool/net/redbean
-        )
-        A="${A%.tar.gz}/o/tool/net/redbean.com"
-        cp "${A%.com}" "$A"
-        zip "$A" .init.lua .lua/*.lua
+        cd "${A%.tar.gz}"
+        ape/apeinstall.sh
+        # `wg` invocation fails without capabilities
+        sed -i -z -re 'N; s|if [(]IsLinux[(][)][)].*disable weird linux capabilities|if (0) {|; P; D' tool/net/redbean.c
+        build/bootstrap/make -j2 o//tool/net/redbean
+        A="${A%.tar.gz}/o/tool/net/redbean"
+        cp "$A" "${A}.com"
         echo "redbean=$A" >> "$GITHUB_OUTPUT"
     - name: test ability to run in Linux
       run: |
-        ${{ steps.build.outputs.redbean }} -vv < /dev/null |\
+        ${{ steps.compile.outputs.redbean }} -vv < /dev/null |\
           awk '{print} /:redbean] [(]srvr[)] listen http:\/\/127.0.0.1:8080/{f=1} END{exit 1-f}'
+    - id: build
+      run: |
+        zip ${{ steps.compile.outputs.redbean }}.com .init.lua .lua/*.lua
+        echo "redbean=$A.com" >> "$GITHUB_OUTPUT"
     - uses: actions/upload-artifact@v4
       with:
         name: redbean.com
