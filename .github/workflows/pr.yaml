@@ -35,7 +35,7 @@ jobs:
         zip "$A" .init.lua .lua/*.lua
         echo "redbean=$A" >> "$GITHUB_OUTPUT"
     - name: test
-      workdir: tests
+      working-directory: tests
       run: |
         cp ${{ steps.build.outputs.redbean }} .
         ./roundup
