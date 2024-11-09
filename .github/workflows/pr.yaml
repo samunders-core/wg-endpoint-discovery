@@ -34,6 +34,11 @@ jobs:
         A="${{ steps.compile.outputs.redbean }}.com"
         zip "$A" .init.lua .lua/*.lua
         echo "redbean=$A" >> "$GITHUB_OUTPUT"
+    - name: test
+      workdir: tests
+      run: |
+        cp ${{ steps.build.outputs.redbean }} .
+        ./roundup
     - uses: actions/upload-artifact@v4
       with:
         name: redbean.com

@@ -49,7 +49,7 @@ wg_show_pattern = re.compile("(%s)%s(%s)%s(%s)%s(%s)%s(%s)(%s%s%s(%s)%s.*)?" %
 	{ NO_SP, SP, NO_SP, SP, NO_SP, SP, NO_SP, SP, NO_SP, SP, NO_SP, SP, NO_SP, SP })
 keepalive = {}
 
-function serve_peers(r)
+function serve_online_peers(r)
 	SetHeader("Content-Type", "text/plain")
 	output = lines(wg_show_all_dump)
 	for _, line in ipairs(output) do
@@ -166,9 +166,9 @@ function OnServerHeartbeat() -- every_minute()
 	ping(ping_targets)
 end
 
-if system.network_adapter(manager_address).ip then
+if system.network_adapter { with = manager_address }.ip then
 	fm.setTemplate("peer", "{%= peer %}\n")
-	fm.setRoute({ "/peers", method = "GET" }, serve_peers)
+	fm.setRoute({ "/online-peers", method = "GET" }, serve_online_peers)
 	fm.setRoute({ "/endpoint/*pubkey", method = "GET" }, serve_endpoint)
 	OnServerHeartbeat = nil -- every_minute = nil
 end

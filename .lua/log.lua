@@ -1,4 +1,4 @@
-log = {}
+local log = {}
 log._DESCRIPTION = 'log pipe to browser over SSE'
 
 local fm = require "fullmoon"
@@ -19,7 +19,7 @@ function log.read(r)
   previous_position = previous_position % log_buffer_size
   local end_position = r.session.log_position % log_buffer_size
   if end_position > previous_position then
-   return log_buffer:read(previous_position, end_position - previous_position), errno
+    return log_buffer:read(previous_position, end_position - previous_position), errno
   end
   local messages = log_buffer:read(previous_position, log_buffer_size - previous_position)
   if end_position > 0 then
@@ -30,11 +30,11 @@ end
 
 function log.log(level, msg)
   Log(level, msg)
-  local json = "%s\0" % {EncodeJson({event=tostring(level), data="<li>%s</li>" % {msg}})}
+  local json = "%s\0" % { EncodeJson({ event = tostring(level), data = "<li>%s</li>" % { msg } }) }
   if #json > log_buffer_size then
     local mark = "(truncated)"
     msg = msg:sub(1, #msg - (#json - log_buffer_size) - #mark)
-    json = "%s\0" % {EncodeJson({event=tostring(level), data="<li>%s%s</li>" % {msg, mark}})}
+    json = "%s\0" % { EncodeJson({ event = tostring(level), data = "<li>%s%s</li>" % { msg, mark } }) }
   end
   local count = #json
   local offset = log_buffer:load(log_buffer_words)
@@ -56,13 +56,13 @@ function log.serve_sse(r)
     return fm.serveContent("sse", {})
   end
   r.session.sse = "done"
-  fm.streamContent("sse", {retry=5000})
+  fm.streamContent("sse", { retry = 5000 })
   repeat
     local messages, errno = log.read(r)
     for msg in messages:gmatch("([^\0]+)\0+") do
       local json, err = DecodeJson(msg)
       if err then
-        log.log(kLogWarn, "Failed to decode '%s': '%s'" % {inspect(msg), err})
+        log.log(kLogWarn, "Failed to decode '%s': '%s'" % { inspect(msg), err })
       elseif json then
         fm.streamContent("sse", json)
       end
@@ -72,9 +72,9 @@ function log.serve_sse(r)
 end
 
 setmetatable(log, {
-   __call = function(_, level, msg)
-      return log.log(level, msg)
-   end,
+  __call = function(_, level, msg)
+    return log.log(level, msg)
+  end,
 })
 
 return log

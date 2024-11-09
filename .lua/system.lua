@@ -1,4 +1,4 @@
-system = {}
+local system = {}
 system._DESCRIPTION = 'Utility functions extracting runtime environment properties'
 
 local inspect = require "inspect"
@@ -41,14 +41,15 @@ end
 -- documented .com / .exe suffixing did not work
 function system.which(name, ignore_not_found)
 	local path, msg = unix.commandv(GetHostOs() == "WINDOWS" and ("%s.exe" % { name }) or name)
-	if msg then
-		log(kLogFatal, "%s lookup failed: %s" % { name, msg })
+	if not path then
+		log(kLogFatal, "%s lookup failed: %s" % { name, msg or "" })
 		if not ignore_not_found then
 			unix.exit(1)
 		end
 	elseif GetHostOs() == "WINDOWS" and path:find(" ") then
 		path = "\"%s\"" % { path }
 	end
+	log(kLogInfo, "%s found at: %s" % { name, path or "" })
 	return path
 end
 
