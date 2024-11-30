@@ -144,18 +144,22 @@ end
 
 function OnServerHeartbeat() -- every_minute()
 	local ping_targets = {}
-	local url = make_url(manager_address, "peers")
-	local status, error, body = Fetch(url)
+	local url = make_url(manager_address, "online-peers")
+	local status, error, body = Fetch(url) -- if assert(unix.fork()) == 0 then; return parsed targets to have keepalive table in parent
 	if body and #body > 2 then
-		for _, network in ipairs(lines("%s show interfaces" % { wg })) do
-			Fetch(make_url(manager_address, "favicon.ico")) -- fails in Windows with interrupted syscall
+		local output = lines("%s show interfaces" % { wg })
+		for _, network in ipairs(output) do
+			-- Fetch(make_url(manager_address, "favicon.ico")) -- fails in Windows with interrupted syscall
 			for pubkey in body:gmatch("([^\r\n]*)[\r\n]*") do
 				ping_targets[fetch_endpoint(network, pubkey, nil)] = true
 			end
 		end
-		return ping(ping_targets)
+		if ping_targets or not output.failure then
+			return ping(ping_targets)
+		end
+	else
+		log(status and kLogInfo or kLogWarn, "Fetch(%s) %s: %s" % { url, status or "failed", body or error or "" })
 	end
-	log(status and kLogInfo or kLogWarn, "Fetch(%s) %s: %s" % { url, status or "failed", body or error or "" })
 	for _, line in ipairs(lines(wg_show_all_dump)) do
 		local _, network, pubkey, privkey, endpoint, _, _, received = wg_show_pattern:search(line)
 		if pubkey and "(none)" == privkey and endpoint then
@@ -166,16 +170,17 @@ function OnServerHeartbeat() -- every_minute()
 	ping(ping_targets)
 end
 
-if system.network_adapter { with = manager_address }.ip then
+if (system.network_adapter { with = manager_address }).ip then
 	fm.setTemplate("peer", "{%= peer %}\n")
 	fm.setRoute({ "/online-peers", method = "GET" }, serve_online_peers)
 	fm.setRoute({ "/endpoint/*pubkey", method = "GET" }, serve_endpoint)
+	log(kLogInfo, "Manager at %s needs no heartbeat handler, clearing it" % { FormatIp(manager_address) })
 	OnServerHeartbeat = nil -- every_minute = nil
 end
 
 fm.setRoute("/statusz", ServeStatusz)
-fm.setRoute("/sse", log.serve_sse)
-fm.setRoute("/*", function()
+--[[fm.setRoute("/sse", log.serve_sse)
+fm.setRoute("/*", function(r)
 	return [[
 <!DOCTYPE html><html><head>
 <script src="https://unpkg.com/htmx.org@1.9.11" ></script>
@@ -184,12 +189,17 @@ fm.setRoute("/*", function()
 <body><h1>Log</h1>
 <ul id="sse" hx-ext="sse" sse-connect="/sse" sse-swap="message,0,1,2,3,4,5,6" hx-swap="beforeend">
 </ul></body></html>]]
-end)
+--end)
 
 if OnServerHeartbeat then
-	ProgramHeartbeatInterval(13000)
-	-- fm.setSchedule("* * * * *", every_minute)
-	LaunchBrowser("log")
+	ProgramHeartbeatInterval(arg[3] or 13000)
+	local url = make_url(manager_address, "statusz")
+	log(kLogInfo,
+	"Pointing browser to /log, then fetching %s to prevent Interrupted system call in OnServerHeartbeat" % { url })
+	LaunchBrowser("/log")
+	-- first Fetch ends with interrupted syscall
+	local status, error, body = Fetch(url)
+	log(status and kLogInfo or kLogWarn, "Fetch(%s) %s: %s" % { url, status or "failed", body or error or "" })
 end
 
 fm.run()

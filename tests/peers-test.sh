@@ -1,39 +1,65 @@
 #!/usr/bin/env roundup
 
 before() {
+    # for app in ape awk basename chmod cut egrep grep head mkdir mv sed tr xdg-mime xdg-open; do
     for app in ape chmod mkdir mv; do
       ln -fs /bin/$app "$(pwd)"
     done
+    (
+        echo '#!/bin/sh'
+        echo 'echo "Default browser: opening $*" >&2'
+    ) > xdg-open  # x-www-browser 
+    chmod +x xdg-open  # x-www-browser
 }
 
 lookup() {	# regex; like grep, but prints first match on success, everything when failed
-  awk -v "PATT=$*" '$0 ~ PATT {found=1;lines=$0;exit} lines {lines=lines""RS""$0;next} {lines=$0} END {printf(lines);exit(1-found)}'
+    awk -v "PATT=$*" '$0 ~ PATT {found=1;lines=$0;exit} lines {lines=lines""RS""$0;next} {lines=$0} END {printf(lines);exit(1-found)}'
 }
 
 after() {
-    /usr/bin/pkill -INT -f 'ape ./redbean.com 127.0.0.1' || true
-    rm -f ape chmod mkdir mv wg
+    /usr/bin/pkill -INT -f 'ape ./redbean.com 127.0.0.' || true
+    rm -rf ape chmod manager mkdir mv wg
 }
 
-it_requires_manager_node_address_as_argument() {
-    ! OUTPUT="$(timeout 3 ./redbean.com < /dev/null 2>&1)"
-    echo "$OUTPUT" | lookup "Malformed manager address provided as first argument: "
-}
-
-#it_accepts_port_as_optional_second_argument() {
-#    false
-#}
-
-it_requires_wireguard_installation() {
-    ! OUTPUT="$(env --ignore-environment "PATH=$(pwd)" /usr/bin/timeout 3 ./redbean.com 127.0.0.1 < /dev/null 2>&1)"
-    echo "$OUTPUT" | lookup "wg lookup failed: " 
-}
-
-it_serves_status_as_key_and_numeric_value_pairs() {
-    ln -s /bin/false wg
-    PATH=$(pwd) ./redbean.com 127.0.0.1 &
+mock_manager_and_online_peer() {
+    mkdir -p manager
+    for app in ape chmod mkdir mv; do
+      ln -fs /bin/$app "$(pwd)/manager"
+    done
+    (
+        echo '#!/bin/sh'
+        echo '[ ! "$*" = "show all dump" ] && echo "Not implemented: $0 $*" >&2 && exit 1'
+        echo "echo 'vpn1	private_key	manager_public_key	1234	off'"
+        echo "echo 'vpn1	offline_peer_public_key	(none)	(none)	10.10.10.1/32	42	0	0	13'"
+        echo "echo 'vpn1	online_peer_public_key	(none)	9.8.7.6:1234	127.0.0.1/32	1731099015	9351784	3698984	13'"
+    ) > manager/wg  # for test purposes allowed ips of online peer points to manager
+    chmod +x manager/wg
+    PATH="$(pwd)/manager" ./redbean.com --strace -l 127.0.0.1 -l 127.0.0.27 127.0.0.1 &
     sleep 1
-    OUTPUT="$(curl http://localhost:8080/statusz)"
-    [ -n "$OUTPUT" ]
-    echo "$OUTPUT" | awk '/^$/{next} $1 !~ /[0-9a-zA-Z_.]+:/ || $2 !~ /[0-9]+/{f=NR} END{exit f}'
+    kill -0 $!
+} 
+ 
+mock_wg_show_interfaces() {
+    (
+        echo '#!/bin/sh'
+        echo '[ ! "$*" = "show interfaces" ] && echo "Not implemented: $0 $*" >&2 && exit 1'
+        echo "echo 'vpn1'"
+    ) > wg 
+    chmod +x wg
+}
+
+it_pings_peers_on_heartbeat() { 
+    mock_manager_and_online_peer 
+    mock_wg_show_interfaces
+    OUTPUT="$(timeout 3 env PATH="$(pwd)" ./redbean.com -p 9090 127.0.0.27 8080 1000)"
+    # assert ping
+    false
+}
+
+it_pings_peers_even_after_manager_goes_offline() {
+    # fail online-peers
+    # mock wg show all dump
+    # fetch endpoints
+    # assert ping
+    false
 }

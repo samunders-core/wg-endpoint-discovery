@@ -5,17 +5,21 @@ local log = require "log"
 
 function lines.popen(cmd)
   local fd, msg = io.popen(cmd, "r")
-  if not fd then
-    log(kLogWarn, "%s failed: %s" % { cmd, msg or "" })
-    return { failure = msg }
-  end
   local result = {}
-  for line in fd:lines() do
-    line, _ = line:gsub("\r", "")
-    table.insert(result, line)
+  if fd then
+    for line in fd:lines() do
+      line, _ = line:gsub("\r", "")
+      table.insert(result, line)
+    end
+    local success, exitcode, code = fd:close()
+    if not success then
+      msg = "%s %s" % { exitcode, code }
+    end
   end
-  fd:close()
-  log(kLogInfo, "%s success: %s lines" % { cmd, #result })
+  log(msg and kLogWarn or kLogInfo, "%s (%s): %s lines" % { cmd, msg or "", #result })
+  if msg then
+    result["failure"] = msg
+  end
   return result
 end
 
