@@ -17,7 +17,8 @@ lookup() {	# regex; like grep, but prints first match on success, everything whe
 }
 
 after() {
-    /usr/bin/pkill -INT -f 'ape ./redbean.com 127.0.0.' || true
+    kill %1 || true
+    pkill -INT -f 'ape ./redbean.com 127.0.0.' || true
     rm -rf ape chmod manager mkdir mv wg
 }
 
