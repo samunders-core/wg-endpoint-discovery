@@ -53,9 +53,9 @@ function serve_online_peers(r)
 	SetHeader("Content-Type", "text/plain")
 	output = lines(wg_show_all_dump)
 	for _, line in ipairs(output) do
-		local _, network, peer, privkey, endpoint, allowed_ips, _, received = wg_show_pattern:search(line)
+		local _, network, peer_, privkey, endpoint, allowed_ips, _, received = wg_show_pattern:search(line)
 		if received ~= "0" and privkey == "(none)" and allowed_ips ~= ("%s:%s" % { FormatIp(GetRemoteAddr()), select(2, GetRemoteAddr()) }) then
-			fm.render("peer", { peer = peer })
+			fm.render("peer", { peer = peer_ })
 		end
 	end
 	return not output.failure or fm.serveError(500, output.failure)()
