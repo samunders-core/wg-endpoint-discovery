@@ -178,7 +178,8 @@ if (system.network_adapter { with = manager_address }).ip then
 	OnServerHeartbeat = nil -- every_minute = nil
 end
 
-fm.setRoute("/statusz", ServeStatusz)
+--SetLogLevel(kLogDebug)
+fm.setRoute({ "/statusz", method = "GET" }, function(r) return ServeStatusz() or "" end)
 --[[fm.setRoute("/sse", log.serve_sse)
 fm.setRoute("/*", function(r)
 	return [[
