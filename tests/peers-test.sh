@@ -18,7 +18,7 @@ lookup() {	# regex; like grep, but prints first match on success, everything whe
 
 after() {
     kill %1 || true
-    pkill -INT -f 'redbean.com 127.0.0.' || true
+    pkill -INT -f 'redbean.com -X' || true
     rm -rf ape chmod manager mkdir mv wg
 }
 
@@ -35,7 +35,7 @@ mock_manager_and_online_peer() {
         echo "echo 'vpn1	online_peer_public_key	(none)	9.8.7.6:1234	127.0.0.1/32	1731099015	9351784	3698984	13'"
     ) > manager/wg  # for test purposes allowed ips of online peer points to manager
     chmod +x manager/wg
-    PATH="$(pwd)/manager" ./redbean.com --strace -l 127.0.0.1 -l 127.0.0.27 127.0.0.1 &
+    PATH="$(pwd)/manager" ./redbean.com -X --strace -l 127.0.0.1 -l 127.0.0.27 127.0.0.1 2>&1 | sed 's/^/MANAGER /' &
     sleep 1
     kill -0 $!
 } 
@@ -52,7 +52,7 @@ mock_wg_show_interfaces() {
 it_pings_peers_on_heartbeat() { 
     mock_manager_and_online_peer 
     mock_wg_show_interfaces
-    OUTPUT="$(timeout 3 env PATH="$(pwd)" ./redbean.com -p 9090 127.0.0.27 8080 1000)"
+    OUTPUT="$(timeout 3 env PATH="$(pwd)" ./redbean.com -X -p 9090 127.0.0.27 8080 1000 2>&1 | sed 's/^/PEER /')"
     # assert ping
     false
 }
