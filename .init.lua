@@ -142,14 +142,13 @@ function ping(addresses)
 	end
 end
 
-function OnServerHeartbeat() -- every_minute()
+function serve_ping_peers(r) -- every ${ARG3:-13000} millis, already in child process
 	local ping_targets = {}
 	local url = make_url(manager_address, "online-peers")
-	local status, error, body = Fetch(url) -- if assert(unix.fork()) == 0 then; return parsed targets to have keepalive table in parent
+	local status, error, body = Fetch(url)
 	if body and #body > 2 then
 		local output = lines("%s show interfaces" % { wg })
 		for _, network in ipairs(output) do
-			-- Fetch(make_url(manager_address, "favicon.ico")) -- fails in Windows with interrupted syscall
 			for pubkey in body:gmatch("([^\r\n]*)[\r\n]*") do
 				ping_targets[fetch_endpoint(network, pubkey, nil)] = true
 			end
@@ -170,12 +169,20 @@ function OnServerHeartbeat() -- every_minute()
 	ping(ping_targets)
 end
 
+function OnServerHeartbeat() -- every ${ARG3:-13000} millis
+	if assert(unix.fork()) == 0 then
+		Fetch(make_url("127.0.0.1", "ping-peers"))  -- so parent can share keepalive table to request handler
+	end
+end
+
 if (system.network_adapter { with = manager_address }).ip then
 	fm.setTemplate("peer", "{%= peer %}\n")
 	fm.setRoute({ "/online-peers", method = "GET" }, serve_online_peers)
 	fm.setRoute({ "/endpoint/*pubkey", method = "GET" }, serve_endpoint)
 	log(kLogInfo, "Manager at %s needs no heartbeat handler, clearing it" % { FormatIp(manager_address) })
-	OnServerHeartbeat = nil -- every_minute = nil
+	OnServerHeartbeat = nil
+else
+	fm.setRoute({ "/ping-peers", method = "GET" }, serve_ping_peers)
 end
 
 --SetLogLevel(kLogDebug)
@@ -194,13 +201,7 @@ fm.setRoute("/*", function(r)
 
 if OnServerHeartbeat then
 	ProgramHeartbeatInterval(arg[3] or 13000)
-	local url = make_url(manager_address, "statusz")
-	log(kLogInfo,
-	"Pointing browser to /log, then fetching %s to prevent Interrupted system call in OnServerHeartbeat" % { url })
 	LaunchBrowser("/log")
-	-- first Fetch ends with interrupted syscall
-	local status, error, body = Fetch(url)
-	log(status and kLogInfo or kLogWarn, "Fetch(%s) %s: %s" % { url, status or "failed", body or error or "" })
 end
 
 fm.run()
