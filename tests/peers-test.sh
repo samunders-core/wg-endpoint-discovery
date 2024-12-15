@@ -119,8 +119,8 @@ it_pings_peers_on_heartbeat() {
       'Fetch[(]http://127[.]0[.]0[.]27:8080/statusz[)] 200: pid:.*statuszrequests: 3'
 }
 
-cat > /dev/null <<'FIXME'
 it_pings_peers_even_after_manager_goes_offline() {
+    return  # FIXME: fetch_endpoint
     mock_online_peer
     mock_wg_show_all_dump
     timeout 3 env PATH="$(pwd)" ./redbean.com -X -p 9090 127.0.0.27 8080 1000 2>&1 | sed -re 's/^/PEER /' | lookup \
@@ -131,4 +131,3 @@ it_pings_peers_even_after_manager_goes_offline() {
       '9351784 bytes received, 3698984 bytes sent' \
       'Fetch[(]http://127[.]0[.]0[.]27:8080/statusz[)] 200: pid:.*statuszrequests: 3'
 }
-FIXME
