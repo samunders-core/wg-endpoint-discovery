@@ -13,7 +13,7 @@ function system.network_adapter(address)
 	local with_format = type(with_address) == "number" and identity or FormatIp
 	local without_format = type(without_address) == "number" and identity or FormatIp
 	for _, adapter in ipairs(unix.siocgifconf()) do
-		log(kLogInfo, "%s == %s" % { with_address, with_format(adapter.ip) or "nil" })
+		-- log(kLogInfo, "%s == %s" % { with_address, with_format(adapter.ip) or "nil" })
 		if with_address == with_format(adapter.ip) then
 			return adapter
 		elseif without_address and adapter.name ~= "lo" and without_address ~= without_format(adapter.ip) then

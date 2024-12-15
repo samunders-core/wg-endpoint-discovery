@@ -1,5 +1,6 @@
 -- https://www.jordanwhited.com/posts/wireguard-endpoint-discovery-nat-traversal/
 local fm = require "fullmoon"
+local inspect = require "inspect"
 local lines = require "lines"
 local log = require "log"
 local system = require "system"
@@ -47,7 +48,11 @@ NO_SP = "[^[:space:]]+"
 SP = "[[:space:]]+"
 wg_show_pattern = re.compile("(%s)%s(%s)%s(%s)%s(%s)%s(%s)(%s%s%s(%s)%s.*)?" %
 	{ NO_SP, SP, NO_SP, SP, NO_SP, SP, NO_SP, SP, NO_SP, SP, NO_SP, SP, NO_SP, SP })
-keepalive = {}
+ports = {}
+
+function OnServerListen(socketdescriptor, serverip, serverport)
+	ports[#ports] = serverport  -- collect ports given by -p command line switch
+end
 
 function serve_online_peers(r)
 	SetHeader("Content-Type", "text/plain")
@@ -88,18 +93,18 @@ function log_transfers(network, pubkey)
 	end
 end
 
-function make_url(address, path)
+function make_url(path, address, port, scheme)
 	return fm.makeUrl("",
 		{
-			scheme = "http",
+			scheme = scheme or "http",
 			host = type(address) == "number" and FormatIp(address) or address,
-			port = arg[2] or "8080",
+			port = port or arg[2] or "8080",
 			path = path
 		})
 end
 
 function fetch_endpoint(network, pubkey, endpoint)
-	local url = make_url(manager_address, fm.makePath("/endpoint/*pubkey", { pubkey = pubkey }))
+	local url = make_url(fm.makePath("/endpoint/*pubkey", { pubkey = pubkey }), manager_address)
 	local status, headers, body = Fetch(url)
 	if body and endpoint and endpoint == body:sub(1, #endpoint) then
 		log(kLogInfo, "Peer %s still at %s" % { pubkey, endpoint })
@@ -110,6 +115,7 @@ function fetch_endpoint(network, pubkey, endpoint)
 	elseif status == 200 and body and not body:find("(none)") then
 		local allowed_ips = body:gsub(".* ([0-9.]+)/32", "%1")
 		if headers["X-Client-Address"] == allowed_ips then
+			log(kLogInfo, inspect({ignored=body}, { newline = "", indent = "  " }))
 		elseif GetHostOs() == "WINDOWS" then
 			system("%s set %s peer %s persistent-keepalive 13 endpoint %s" % { wg, network, pubkey, body })
 			system("%s add %s mask 255.255.255.255 %s" % { which("route"), allowed_ips, headers["X-Client-Address"] })
@@ -135,19 +141,23 @@ end
 
 function ping(addresses)
 	addresses[""] = nil -- do not treat results of failed Fetch-es as address
+	result = {}
 	for address, _ in pairs(addresses) do
-		local url = make_url(address, "statusz")
-		local status, error, body = Fetch(url, { keepalive = keepalive })
-		log(status and kLogInfo or kLogWarn, "Fetch(%s) %s: %s" % { url, status or "failed", body or error or "" })
+		local url = make_url("statusz", address)
+		local status, error, body = Fetch(url)
+		result[address] = "Fetch(%s) %s: %s" % { url, status or "failed", body or error or "" }
 	end
+	return inspect(result, { newline = "", indent = "  " })
 end
 
 function serve_ping_peers(r) -- every ${ARG3:-13000} millis, already in child process
+	SetHeader("Content-Type", "text/plain")
 	local ping_targets = {}
-	local url = make_url(manager_address, "online-peers")
+	local url = make_url("online-peers", manager_address)
 	local status, error, body = Fetch(url)
 	if body and #body > 2 then
 		local output = lines("%s show interfaces" % { wg })
+		-- log(kLogInfo, inspect({body=body, output=output}, { newline = "", indent = "  " }))
 		for _, network in ipairs(output) do
 			for pubkey in body:gmatch("([^\r\n]*)[\r\n]*") do
 				ping_targets[fetch_endpoint(network, pubkey, nil)] = true
@@ -166,12 +176,14 @@ function serve_ping_peers(r) -- every ${ARG3:-13000} millis, already in child pr
 			ping_targets[fetch_endpoint(network, pubkey, endpoint)] = true
 		end
 	end
-	ping(ping_targets)
+	return ping(ping_targets)
 end
 
 function OnServerHeartbeat() -- every ${ARG3:-13000} millis
-	if assert(unix.fork()) == 0 then
-		Fetch(make_url("127.0.0.1", "ping-peers"))  -- so parent can share keepalive table to request handler
+	local url = make_url("ping-peers", "127.0.0.1", ports[#ports])
+	if assert(unix.fork()) == 0 then  -- Fetch blocks
+		local status, error, body = Fetch(url)
+		log(status and kLogInfo or kLogWarn, "Fetch(%s) %s: %s" % { url, status or "failed", body or error or "" })
 	end
 end
 
