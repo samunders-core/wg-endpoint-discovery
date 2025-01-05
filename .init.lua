@@ -3,6 +3,7 @@ local fm = require "fullmoon"
 local inspect = require "inspect"
 local lines = require "lines"
 local log = require "log"
+local sqlite3 = require 'lsqlite3'
 local system = require "system"
 local which = system.which
 
@@ -34,6 +35,14 @@ if manager_address == -1 then
 			end
 			-- TODO: start configuration wizard
 		end
+	elseif GetHostOs() == "LINUX" and not which("wg", "ignore_not_found") then
+		-- TODO https://superuser.com/questions/287371/how-to-obtain-kernel-config-from-currently-running-linux-system
+		for _, cmd in ipairs({ "apt-get", "dnf" }) do
+			cmd = which(cmd, "ignore_not_found")
+			if cmd then
+				system("%s --yes install wireguard" % { cmd })
+			end
+		end
 	end
 	log(kLogFatal, "Malformed manager address provided as first argument: %s" % { arg[1] or "" })
 	unix.exit(1)
@@ -43,46 +52,93 @@ end
 
 wg = which("wg")
 wg_show_all_dump = "%s show all dump" % { wg }
-
-NO_SP = "[^[:space:]]+"
-SP = "[[:space:]]+"
-wg_show_pattern = re.compile("(%s)%s(%s)%s(%s)%s(%s)%s(%s)(%s%s%s(%s)%s.*)?" %
-	{ NO_SP, SP, NO_SP, SP, NO_SP, SP, NO_SP, SP, NO_SP, SP, NO_SP, SP, NO_SP, SP })
+wg_show_pattern = ("(network+)%s+(peer+)%s+(key+)%s+(endpoint+)%s+(allowed_ips+)%s*(hands_shaken_at*)%s*(received*)%s*.*")
+	:gsub("[_%w][_%w]+", "%%S")
 ports = {}
+db = fm.makeStorage(":memory:", [[ CREATE TABLE ping_failures(address, from_, at); ]])
+
 
 function OnServerListen(socketdescriptor, serverip, serverport)
-	ports[#ports] = serverport  -- collect ports given by -p command line switch
+	ports[#ports] = serverport -- collect ports given by -p command line switch
 end
 
 function serve_online_peers(r)
-	SetHeader("Content-Type", "text/plain")
-	output = lines(wg_show_all_dump)
+	local json = (r.headers.Accept or ""):find("/json") and {}
+	SetHeader("Content-Type", json and "application/json" or "text/plain")
+	SetHeader("X-Client-Address", FormatIp(GetRemoteAddr()))
+	local output = lines(wg_show_all_dump)
 	for _, line in ipairs(output) do
-		local _, network, peer_, privkey, endpoint, allowed_ips, _, received = wg_show_pattern:search(line)
+		local _, _, network, peer, privkey, endpoint, allowed_ips, hands_shaken_at, received = line:find(wg_show_pattern)
+		log(kLogInfo, inspect({ line, network, peer, privkey, endpoint, allowed_ips, hands_shaken_at, received }))
 		if received ~= "0" and privkey == "(none)" and allowed_ips ~= ("%s:%s" % { FormatIp(GetRemoteAddr()), select(2, GetRemoteAddr()) }) then
-			fm.render("peer", { peer = peer_ })
+			if json then
+				table.insert(json, peer)
+			else
+				fm.render("peer", { ["peer"] = peer })
+			end
 		end
+	end
+	if json then
+		SetStatus(output.failure and 500 or 200)
+		return fm.serveContent("json", json or { error = output.failure })
 	end
 	return not output.failure or fm.serveError(500, output.failure)()
 end
 
 function serve_endpoint(r)
-	output = lines(wg_show_all_dump)
+	local output = lines(wg_show_all_dump)
 	for _, line in ipairs(output) do
-		local _, network, peer, pubkey, endpoint, allowed_ips, _, received = wg_show_pattern:search(line)
+		local _, _, network, peer, pubkey, endpoint, allowed_ips, hands_shaken_at, received = line:find(wg_show_pattern)
 		if endpoint and not endpoint:find("(none)") and ({ [peer] = true, [pubkey] = true })[r.params.pubkey] then
 			if not endpoint:find(":") then
 				endpoint = "%s:%s" % { FormatIp(system.network_adapter { without = GetServerAddr() }.ip), endpoint }
 			end
-			SetHeader("Content-Type", "text/plain")
+			local json = (r.headers.Accept or ""):find("/json") and { endpoint = endpoint }
+			SetHeader("Content-Type", json and "application/json" or "text/plain")
 			SetHeader("X-Client-Address", FormatIp(GetRemoteAddr()))
+			local result = endpoint
 			if allowed_ips:find("/") then
-				return "%s allowed-ips %s" % { endpoint, allowed_ips }
+				if json then
+					json["allowed_ips"] = allowed_ips
+				end
+				result = "%s allowed-ips %s # latest-handshake=%s" % { endpoint, allowed_ips, hands_shaken_at }
 			end
-			return endpoint
+			if json then
+				if hands_shaken_at ~= "" then
+					json["hands_shaken_at"] = hands_shaken_at
+				end
+				local resultset, error = db:fetchAll(
+					[[ DELETE FROM ping_failures WHERE address = ?1 RETURNING from_, at; ]], FormatIp(GetRemoteAddr())
+				)
+				ping_failures = {}
+				for _, row in ipairs(resultset or {}) do
+					ping_failures[row["from"]] = row["at"]
+				end
+				json[error and "error" or "ping_failures"] = error or ping_failures
+			end
+			return json and fm.serveContent("json", json) or result
 		end
 	end
+	if (r.headers.Accept or ""):find("/json") then
+		SetStatus(output.failure and 500 or 404)
+		return fm.serveContent("json", { error = output.failure or "Peer not seen yet" })
+	end
 	return fm.serveError(output.failure and 500 or 404, output.failure or "Peer not seen yet")()
+end
+
+function serve_unreachable_peer(r) -- this runs in child process
+	params, err = DecodeJson(GetBody():gsub("^%s*$", "null"))
+	if type(params) ~= "table" then
+		return fm.serveError(400, "Non-empty JSON object expected: %s" % { err })()
+	end
+	local _, error = db:execute(
+		[[ INSERT INTO ping_failures(address, from_, at) VALUES(?1, ?2, ?3) ON CONFLICT(address, from_) DO UPDATE SET at=?3; ]],
+		params["peer"], params["from"], params["at"]
+	)
+	if error then
+		return fm.serveError(500, error)()
+	end
+	SetStatus(201)
 end
 
 function log_transfers(network, pubkey)
@@ -103,49 +159,63 @@ function make_url(path, address, port, scheme)
 		})
 end
 
-function fetch_endpoint(network, pubkey, endpoint)
+function fetch_endpoint(network, pubkey, endpoint, hands_shaken_at)
 	local url = make_url(fm.makePath("/endpoint/*pubkey", { pubkey = pubkey }), manager_address)
-	local status, headers, body = Fetch(url)
-	if body and endpoint and endpoint == body:sub(1, #endpoint) then
+	local status, headers, body = Fetch(url, { method = "GET", headers = { Accept = "application/json" } })
+	body = DecodeJson((body or ""):gsub("^%s*$", "null"))
+	if type(body) == "table" and endpoint and endpoint == (body["endpoint"] or ""):sub(1, #endpoint) then
 		log(kLogInfo, "Peer %s still at %s" % { pubkey, endpoint })
-		local allowed_ips = body:gsub(".* ([0-9.]+)/32", "%1")
+		local allowed_ips = (body["allowed_ips"] or ""):gsub("/%d+", "")
 		if headers["X-Client-Address"] ~= allowed_ips then
-			return allowed_ips
+			hands_shaken_at[allowed_ips] = body["hands_shaken_at"] or tostring(GetDate())
 		end
-	elseif status == 200 and body and not body:find("(none)") then
-		local allowed_ips = body:gsub(".* ([0-9.]+)/32", "%1")
+	elseif status == 200 and type(body) == "table" and not (body["endpoint"] or "(none)"):find("(none)") then
+		local allowed_ips = (body["allowed_ips"] or ""):gsub("/%d+", "")
+		endpoint = allowed_ips == "" and body["endpoint"] or "%s allowed_ips %s" % { body["endpoint"], allowed_ips }
 		if headers["X-Client-Address"] == allowed_ips then
-			log(kLogInfo, inspect({ignored=body}, { newline = "", indent = "  " }))
+			-- TODO: allow data info about peers that cannot reach us
+			log(kLogInfo, inspect({ ignored = body }, { newline = "", indent = "  " }))
 		elseif GetHostOs() == "WINDOWS" then
-			system("%s set %s peer %s persistent-keepalive 13 endpoint %s" % { wg, network, pubkey, body })
+			system("%s set %s peer %s persistent-keepalive 13 endpoint %s" % { wg, network, pubkey, endpoint })
 			system("%s add %s mask 255.255.255.255 %s" % { which("route"), allowed_ips, headers["X-Client-Address"] })
 			system(
 				"%s advfirewall firewall add rule name=redbean_statusz protocol=tcp dir=in localip=%s localport=%s action=allow" %
 				{ which("netsh"), headers["X-Client-Address"], arg[2] or "8080" })
 			log_transfers(network, pubkey)
-			return allowed_ips
+			hands_shaken_at[allowed_ips] = body["hands_shaken_at"] or tostring(GetDate())
 		else
 			adapter = system.network_adapter(headers["X-Client-Address"])
 			if adapter.ip then
-				system("%s set %s peer %s persistent-keepalive 13 endpoint %s" % { wg, network, pubkey, body })
+				system("%s set %s peer %s persistent-keepalive 13 endpoint %s" % { wg, network, pubkey, endpoint })
 				system("%s route replace %s dev %s scope link" % { which("ip"), allowed_ips, adapter.name })
 				log_transfers(network, pubkey)
-				return allowed_ips
+				hands_shaken_at[allowed_ips] = body["hands_shaken_at"] or tostring(GetDate())
 			end
 		end
 	elseif status ~= 404 then
 		log(status and kLogInfo or kLogWarn, "Fetch(%s) %s: %s" % { url, status or "failed", body or headers or "" })
 	end
-	return ""
 end
 
-function ping(addresses)
+function ping(addresses, from)
 	addresses[""] = nil -- do not treat results of failed Fetch-es as address
-	result = {}
+	local report_url = make_url("unreachable-peer", manager_address)
+	local result = {}
 	for address, _ in pairs(addresses) do
+		local now = tostring(GetDate())
 		local url = make_url("statusz", address)
 		local status, error, body = Fetch(url)
 		result[address] = "Fetch(%s) %s: %s" % { url, status or "failed", body or error or "" }
+		if not status then
+			local post_body = EncodeJson({ ["peer"] = address, ["from"] = from, ["at"] = now })
+			status, error, body = Fetch(report_url, {
+				method = "POST",
+				headers = { ["Content-Type"] = "application/json" },
+				body = post_body
+			})
+			result[address] = "%s\nFetch(%s, {POST, [Content-Type: application/json] , %s}) %s: %s" %
+				{ result[address], report_url, post_body, status or "failed", body or error or "" }
+		end
 	end
 	return inspect(result, { newline = "", indent = "  " })
 end
@@ -154,34 +224,35 @@ function serve_ping_peers(r) -- every ${ARG3:-13000} millis, already in child pr
 	SetHeader("Content-Type", "text/plain")
 	local ping_targets = {}
 	local url = make_url("online-peers", manager_address)
-	local status, error, body = Fetch(url)
+	local status, headers, body = Fetch(url)
 	if body and #body > 2 then
 		local output = lines("%s show interfaces" % { wg })
 		-- log(kLogInfo, inspect({body=body, output=output}, { newline = "", indent = "  " }))
 		for _, network in ipairs(output) do
 			for pubkey in body:gmatch("([^\r\n]*)[\r\n]*") do
-				ping_targets[fetch_endpoint(network, pubkey, nil)] = true
+				fetch_endpoint(network, pubkey, nil, ping_targets)
 			end
 		end
 		if ping_targets or not output.failure then
-			return ping(ping_targets)
+			return ping(ping_targets, headers["X-Client-Address"])
 		end
 	else
-		log(status and kLogInfo or kLogWarn, "Fetch(%s) %s: %s" % { url, status or "failed", body or error or "" })
+		log(status and kLogInfo or kLogWarn, "Fetch(%s) %s: %s" % { url, status or "failed", body or headers or "" })
 	end
 	for _, line in ipairs(lines(wg_show_all_dump)) do
-		local _, network, pubkey, privkey, endpoint, _, _, received = wg_show_pattern:search(line)
+		local _, _, network, pubkey, privkey, endpoint, allowed_ips, hands_shaken_at, received = line:find(
+			wg_show_pattern)
 		if pubkey and "(none)" == privkey and endpoint then
 			log("Received %s from %s" % { received, endpoint })
-			ping_targets[fetch_endpoint(network, pubkey, endpoint)] = true
+			fetch_endpoint(network, pubkey, endpoint, ping_targets)
 		end
 	end
-	return ping(ping_targets)
+	return ping(ping_targets, headers["X-Client-Address"])
 end
 
-function OnServerHeartbeat() -- every ${ARG3:-13000} millis
+function OnServerHeartbeat()      -- every ${ARG3:-13000} millis
 	local url = make_url("ping-peers", "127.0.0.1", ports[#ports])
-	if assert(unix.fork()) == 0 then  -- Fetch blocks
+	if assert(unix.fork()) == 0 then -- Fetch blocks
 		local status, error, body = Fetch(url)
 		log(status and kLogInfo or kLogWarn, "Fetch(%s) %s: %s" % { url, status or "failed", body or error or "" })
 	end
@@ -191,6 +262,7 @@ if (system.network_adapter { with = manager_address }).ip then
 	fm.setTemplate("peer", "{%= peer %}\n")
 	fm.setRoute({ "/online-peers", method = "GET" }, serve_online_peers)
 	fm.setRoute({ "/endpoint/*pubkey", method = "GET" }, serve_endpoint)
+	fm.setRoute({ "/unreachable-peer", method = "POST" }, serve_unreachable_peer)
 	log(kLogInfo, "Manager at %s needs no heartbeat handler, clearing it" % { FormatIp(manager_address) })
 	OnServerHeartbeat = nil
 else

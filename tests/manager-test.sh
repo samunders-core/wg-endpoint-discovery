@@ -34,6 +34,8 @@ it_excludes_itself_from_served_online_peers() {
     mock_online_peers
     OUTPUT="$(curl http://localhost:8080/online-peers)"
     [ "$OUTPUT" = "online_peer_public_key" ]
+    OUTPUT="$(curl -H 'Accept: application/json' http://localhost:8080/online-peers)"
+    [ "$OUTPUT" = '["online_peer_public_key"]' ]
 }
 
 it_serves_endpoint() {
@@ -49,9 +51,17 @@ it_serves_endpoint() {
     sleep 1
     OUTPUT="$(curl http://localhost:8080/endpoint/manager_public_key)"
     [ "$OUTPUT" = "$(ip -o route get 1.1.1.1 | awk '{print $7}'):1234" ]
+    OUTPUT="$(curl -H 'Accept: application/json' http://localhost:8080/endpoint/manager_public_key)"
+    [ "$OUTPUT" = '{"endpoint":"'"$(ip -o route get 1.1.1.1 | awk '{print $7}'):1234"'","ping_failures":{}}' ]
     OUTPUT="$(curl http://localhost:8080/endpoint/offline_peer_public_key)"
     echo "$OUTPUT" | lookup "404 Peer not seen yet"
+    OUTPUT="$(curl -H 'Accept: application/json' http://localhost:8080/endpoint/offline_peer_public_key)"
+    echo "$OUTPUT" | lookup '{"error":"Peer not seen yet"}'
     OUTPUT="$(curl http://localhost:8080/endpoint/online_peer_public_key)"
-    [ "$OUTPUT" = "9.8.7.6:1234 allowed-ips 10.10.10.2/32" ]
+    [ "$OUTPUT" = "9.8.7.6:1234 allowed-ips 10.10.10.2/32 # latest-handshake=1731099015" ]
+    OUTPUT="$(curl -H 'Accept: application/json' http://localhost:8080/endpoint/online_peer_public_key)"
+    [ "$OUTPUT" = '{"allowed_ips":"10.10.10.2/32","endpoint":"9.8.7.6:1234","hands_shaken_at":"1731099015","ping_failures":{}}' ]
+    [ "$OUTPUT" = '{"allowed_ips":"10.10.10.2'"${CI:+\\}"'/32","endpoint":"9.8.7.6:1234","hands_shaken_at":"1731099015"}' ]
+    # backslash above is cosmopolitan/redbean bug
 }
 
