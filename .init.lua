@@ -54,7 +54,8 @@ wg_show_all_dump = "%s show all dump" % { wg }
 wg_show_pattern = ("(network+)%s+(peer+)%s+(key+)%s+(endpoint+)%s+(allowed_ips+)%s*(hands_shaken_at*)%s*(received*)%s*.*")
 	:gsub("[_%w][_%w]+", "%%S")
 ports = {}
-db = fm.makeStorage(":memory:", [[ CREATE TABLE ping_failures(address, from_, at); ]])
+db = manager_address ~= -1 and
+fm.makeStorage(":memory:", [[ CREATE TABLE ping_failures(address TEXT PRIMARY KEY, count INTEGER NOT NULL); ]])
 
 
 function OnServerListen(socketdescriptor, serverip, serverport)
@@ -102,18 +103,8 @@ function serve_endpoint(r)
 				end
 				result = "%s allowed-ips %s # latest-handshake=%s" % { endpoint, allowed_ips, hands_shaken_at }
 			end
-			if json then
-				if hands_shaken_at ~= "" then
-					json["hands_shaken_at"] = hands_shaken_at
-				end
-				local resultset, error = db:fetchAll(
-					[[ DELETE FROM ping_failures WHERE address = ?1 RETURNING from_, at; ]], FormatIp(GetRemoteAddr())
-				)
-				ping_failures = {}
-				for _, row in ipairs(resultset or {}) do
-					ping_failures[row["from"]] = row["at"]
-				end
-				json[error and "error" or "ping_failures"] = error or ping_failures
+			if json and hands_shaken_at ~= "" then
+				json["hands_shaken_at"] = hands_shaken_at
 			end
 			return json and fm.serveContent("json", json) or result
 		end
@@ -123,21 +114,6 @@ function serve_endpoint(r)
 		return fm.serveContent("json", { error = output.failure or "Peer not seen yet" })
 	end
 	return fm.serveError(output.failure and 500 or 404, output.failure or "Peer not seen yet")()
-end
-
-function serve_unreachable_peer(r) -- this runs in child process
-	params, err = DecodeJson(GetBody():gsub("^%s*$", "null"))
-	if type(params) ~= "table" then
-		return fm.serveError(400, "Non-empty JSON object expected: %s" % { err })()
-	end
-	local _, error = db:execute(
-		[[ INSERT INTO ping_failures(address, from_, at) VALUES(?1, ?2, ?3) ON CONFLICT(address, from_) DO UPDATE SET at=?3; ]],
-		params["peer"], params["from"], params["at"]
-	)
-	if error then
-		return fm.serveError(500, error)()
-	end
-	SetStatus(201)
 end
 
 function log_transfers(network, pubkey)
@@ -196,24 +172,45 @@ function fetch_endpoint(network, pubkey, endpoint, hands_shaken_at)
 	end
 end
 
-function ping(addresses, from)
+function ping(addresses)
 	addresses[""] = nil -- do not treat results of failed Fetch-es as address
-	local report_url = make_url("unreachable-peer", manager_address)
 	local result = {}
-	for address, _ in pairs(addresses) do
-		local now = tostring(GetDate())
+	for address, hands_shaken_at in pairs(addresses) do
+		local now = GetDate()
 		local url = make_url("statusz", address)
 		local status, error, body = Fetch(url)
 		result[address] = "Fetch(%s) %s: %s" % { url, status or "failed", body or error or "" }
-		if not status then
-			local post_body = EncodeJson({ ["peer"] = address, ["from"] = from, ["at"] = now })
-			status, error, body = Fetch(report_url, {
-				method = "POST",
-				headers = { ["Content-Type"] = "application/json" },
-				body = post_body
-			})
-			result[address] = "%s\nFetch(%s, {POST, [Content-Type: application/json] , %s}) %s: %s" %
-				{ result[address], report_url, post_body, status or "failed", body or error or "" }
+		if status then
+			local row, error = db:fetchOne(
+				[[ DELETE FROM ping_failures WHERE address = ?1 RETURNING count; ]], address
+			)
+			if error then
+				result[address] = "%s\n%s" % { result[address], error }
+			elseif row["count"] then
+				result[address] = "%s\nConnection restored after %s attempts" % { result[address], row["count"] }
+			end
+		else
+			local row, error = db:fetchOne([[
+					INSERT INTO ping_failures(address, count) VALUES(?1, 1)
+					ON CONFLICT(address) DO UPDATE SET count=count+1
+					RETURNING count;
+				]], address
+			)
+			if error or row["count"] <= 4 or 180 < now - hands_shaken_at then
+				result[address] = "%s%s%s" % {
+					error and result[address] or row["count"],
+					error and "\n" or "x since %s: " % { FormatHttpDateTime(hands_shaken_at) },
+					error or result[address]
+				}
+			elseif GetHostOs() == "WINDOWS" then -- we're in grandchild of restarted process
+				result[address] = "Ping to %s failed repeatedly, restating VPN client" % { address }
+				system(
+					[[schtasks /create /tn "Restart wg" /tr '%s -command "Restart-Service %s -Force"' /sc once /st 00:00:03 /ru "SYSTEM"]]
+					% { which("powershell"), "WireGuardTunnel$my-tunnel" }
+				)
+				-- https://learn.microsoft.com/en-us/windows-server/administration/windows-commands/sc-query
+				--system("Start-Process sc.exe -ArgumentList 'config', 'WireGuardTunnel$my-tunnel', 'start= delayed-auto' -Wait -NoNewWindow -PassThru | Out-Null")
+			end
 		end
 	end
 	return inspect(result, { newline = "", indent = "  " })
@@ -233,7 +230,7 @@ function serve_ping_peers(r) -- every ${ARG3:-13000} millis, already in child pr
 			end
 		end
 		if ping_targets or not output.failure then
-			return ping(ping_targets, headers["X-Client-Address"])
+			return ping(ping_targets)
 		end
 	else
 		log(status and kLogInfo or kLogWarn, "Fetch(%s) %s: %s" % { url, status or "failed", body or headers or "" })
@@ -246,7 +243,7 @@ function serve_ping_peers(r) -- every ${ARG3:-13000} millis, already in child pr
 			fetch_endpoint(network, pubkey, endpoint, ping_targets)
 		end
 	end
-	return ping(ping_targets, headers["X-Client-Address"])
+	return ping(ping_targets)
 end
 
 function OnServerHeartbeat()      -- every ${ARG3:-13000} millis
@@ -261,7 +258,6 @@ if (system.network_adapter { with = manager_address }).ip then
 	fm.setTemplate("peer", "{%= peer %}\n")
 	fm.setRoute({ "/online-peers", method = "GET" }, serve_online_peers)
 	fm.setRoute({ "/endpoint/*pubkey", method = "GET" }, serve_endpoint)
-	fm.setRoute({ "/unreachable-peer", method = "POST" }, serve_unreachable_peer)
 	log(kLogInfo, "Manager at %s needs no heartbeat handler, clearing it" % { FormatIp(manager_address) })
 	OnServerHeartbeat = nil
 else

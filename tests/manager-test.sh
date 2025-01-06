@@ -52,7 +52,7 @@ it_serves_endpoint() {
     OUTPUT="$(curl http://localhost:8080/endpoint/manager_public_key)"
     [ "$OUTPUT" = "$(ip -o route get 1.1.1.1 | awk '{print $7}'):1234" ]
     OUTPUT="$(curl -H 'Accept: application/json' http://localhost:8080/endpoint/manager_public_key)"
-    [ "$OUTPUT" = '{"endpoint":"'"$(ip -o route get 1.1.1.1 | awk '{print $7}'):1234"'","ping_failures":{}}' ]
+    [ "$OUTPUT" = '{"endpoint":"'"$(ip -o route get 1.1.1.1 | awk '{print $7}'):1234"'"}' ]
     OUTPUT="$(curl http://localhost:8080/endpoint/offline_peer_public_key)"
     echo "$OUTPUT" | lookup "404 Peer not seen yet"
     OUTPUT="$(curl -H 'Accept: application/json' http://localhost:8080/endpoint/offline_peer_public_key)"
@@ -60,6 +60,6 @@ it_serves_endpoint() {
     OUTPUT="$(curl http://localhost:8080/endpoint/online_peer_public_key)"
     [ "$OUTPUT" = "9.8.7.6:1234 allowed-ips 10.10.10.2/32 # latest-handshake=1731099015" ]
     OUTPUT="$(curl -H 'Accept: application/json' http://localhost:8080/endpoint/online_peer_public_key)"
-    [ "$OUTPUT" = '{"allowed_ips":"10.10.10.2/32","endpoint":"9.8.7.6:1234","hands_shaken_at":"1731099015","ping_failures":{}}' ]
+    [ "$OUTPUT" = '{"allowed_ips":"10.10.10.2/32","endpoint":"9.8.7.6:1234","hands_shaken_at":"1731099015"}' ]
 }
 
