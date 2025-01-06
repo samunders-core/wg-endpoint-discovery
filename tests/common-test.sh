@@ -27,7 +27,7 @@ it_requires_manager_address_as_argument() {
 
 it_requires_wireguard_installation() {
     ! OUTPUT="$(env --ignore-environment "PATH=$(pwd)" /usr/bin/timeout 3 ./redbean.com 127.0.0.1 < /dev/null 2>&1)"
-    echo "$OUTPUT" | lookup "wg lookup failed: " 
+    echo "$OUTPUT" | lookup "commandv[(][)] failed: No such file or directory 'wg'" 
 }
 
 it_serves_status_as_key_and_numeric_value_pairs() {

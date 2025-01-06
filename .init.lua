@@ -1,4 +1,3 @@
--- https://www.jordanwhited.com/posts/wireguard-endpoint-discovery-nat-traversal/
 local fm = require "fullmoon"
 local inspect = require "inspect"
 local lines = require "lines"
