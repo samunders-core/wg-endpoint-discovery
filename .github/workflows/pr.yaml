@@ -11,7 +11,7 @@ jobs:
       id: download
       with:
         repository: jart/cosmopolitan
-        tag: 3.9.7
+        tag: 4.0.2
         fileName: cosmopolitan-*.tar.gz
     - id: compile
       run: |
@@ -21,6 +21,8 @@ jobs:
         ape/apeinstall.sh
         # `wg` invocation fails without capabilities
         sed -i -z -re 'N; s|if [(]IsLinux[(][)][)].*disable weird linux capabilities|if (0) {|; P; D' tool/net/redbean.c
+        # EncodeJson escapes forward slashes in string
+        sed -i -re '/0, 0, 7, 0, 0, 0, 9, 9, 0, 0, 0, 0, 0, 0, 0, 6,/ s|, 6,  // 0x20|, 0,  // 0x20|' net/http/escapejsstringliteral.c
         make -j2 o//tool/net/redbean
         A="${A%.tar.gz}/o/tool/net/redbean"
         cp "$A" "${A}.com"
