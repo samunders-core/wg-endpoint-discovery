@@ -1,4 +1,6 @@
-# Ideal case
+Implementation of https://www.jordanwhited.com/posts/wireguard-endpoint-discovery-nat-traversal
+
+Unfortunately Bob's firewall (or their ISP's) learns addresses only for a few seconds after first Bob's packet is sent. Solution is to restart Bob's VPN client:
 
 ```mermaid
 sequenceDiagram
@@ -8,22 +10,42 @@ sequenceDiagram
 
     A->>S: GET /online-peers
     S->>A: 200 [alice_key]
+
     A->>S: GET /online-peers
     S->>A: 200 [alice_key]
+    
     B->>S: GET /online-peers
     S->>B: 200 [alice_key, bob_key]
     
     A->>S: GET /online-peers
     S->>A: 200 [alice_key, bob_key]
     A->>S: GET /peer/bob_key
-    S->>A: 200 {"endpoint":"Bob's IP address", "allowed_ips":"address/bitmask", "hands_shaken_at":"unix_timestamp"}
+    S->>A: 200 {"endpoint":"bob_ip_address:port_1", "allowed_ips":"address/bitmask", "hands_shaken_at":"unix_timestamp"}
+    A->>A: wg set vpn1 peer bob_key persistent-keepalive 13 endpoint bob_ip_address:port_1 allowed-ips address
     A->>B: GET /statusz
-    B->>A: 200 KPI lines
+    Note over A,B: No response due to Bob's firewall (or their ISP's)
     
     B->>S: GET /online-peers
     S->>B: 200 [alice_key, bob_key]
     B->>S: GET /peer/alice_key
-    S->>B: 200 {"endpoint":"Alice's IP address", "allowed_ips":"address/bitmask", "hands_shaken_at":"unix_timestamp"}
+    S->>B: 200 {"endpoint":"alice_ip_address:port_X", "allowed_ips":"address/bitmask", "hands_shaken_at":"unix_timestamp"}
+    B->>B: wg set vpn1 peer alice_key persistent-keepalive 13 endpoint alice_ip_address:port_X allowed-ips address
+    B->>A: GET /statusz
+    Note over A,B: No response since A's traffic did not pass through yet. Solution: restart Bob's VPN client
+
+    A->>S: GET /online-peers
+    S->>A: 200 [alice_key, bob_key]
+    A->>S: GET /peer/bob_key
+    S->>A: 200 {"endpoint":"bob_ip_address:port_2", "allowed_ips":"address/bitmask", "hands_shaken_at":"unix_timestamp"}
+    A->>A: wg set vpn1 peer bob_key persistent-keepalive 13 endpoint bob_ip_address:port_2 allowed-ips address
+    A->>B: GET /statusz
+    B->>A: 200 KPI lines
+
+    B->>S: GET /online-peers
+    S->>B: 200 [alice_key, bob_key]
+    B->>S: GET /peer/alice_key
+    S->>B: 200 {"endpoint":"alice_ip_address:port_X", "allowed_ips":"address/bitmask", "hands_shaken_at":"unix_timestamp"}
+    B->>B: wg set vpn1 peer alice_key persistent-keepalive 13 endpoint alice_ip_address:port_X allowed-ips address
     B->>A: GET /statusz
     A->>B: 200 KPI lines
 ```
