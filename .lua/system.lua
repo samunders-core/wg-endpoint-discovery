@@ -43,16 +43,14 @@ end
 
 -- documented .com / .exe suffixing did not work
 function system.which(name, ignore_not_found)
-	local path, msg = unix.commandv(GetHostOs() == "WINDOWS" and ("%s.exe" % { name }) or name)
-	if not path then
-		log(kLogFatal, "%s lookup failed: %s" % { name, msg or "" })
-		if not ignore_not_found then
-			unix.exit(1)
-		end
+	local path, error = unix.commandv(GetHostOs() == "WINDOWS" and ("%s.exe" % { name }) or name)
+	if error then
+		log(ignore_not_found and kLogWarn or kLogFatal, "%s '%s'" % { error, name })
+		return nil
 	elseif GetHostOs() == "WINDOWS" and path:find(" ") then
 		path = "\"%s\"" % { path }
 	end
-	log(kLogInfo, "%s found at: %s" % { name, path or "" })
+	log(kLogInfo, "%s found at: '%s'" % { name, path })
 	return path
 end
 
