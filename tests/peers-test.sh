@@ -38,7 +38,7 @@ lookup() { # [awk_options] regex [regex ...]; like grep, but prints all first ma
 after() {
     kill %1 || true
     pkill -INT -f 'redbean.com -X' || true
-    rm -rf ape chmod ip manager mkdir mv wg
+    rm -rf ape chmod ip manager mkdir mv wg xdg-open
 }
 
 mock_manager_and_online_peer() {
