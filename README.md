@@ -1,6 +1,6 @@
-Implementation of https://www.jordanwhited.com/posts/wireguard-endpoint-discovery-nat-traversal
+Implementation of https://www.jordanwhited.com/posts/wireguard-endpoint-discovery-nat-traversal using https://redbean.dev
 
-Unfortunately Bob's firewall (or their ISP's) learns addresses only for a few seconds after first Bob's packet is sent. Solution is to restart Bob's VPN client:
+Bob's firewall (or their ISP's) learns addresses only for a few seconds after first Bob's packet is sent. Solution is to restart Bob's VPN client:
 
 ```mermaid
 sequenceDiagram
@@ -36,6 +36,7 @@ sequenceDiagram
         B->>A: GET /statusz
         Note over A,B: No response since A's traffic did not pass through yet. Solution: restart Bob's VPN client
     end
+    B->>B: VPN client restart
 
     loop every 13 seconds
         A->>S: GET /online-peers
