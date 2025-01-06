@@ -2,11 +2,15 @@
 
 ```mermaid
 sequenceDiagram
-    A[Alice]->>S[VPN server]: GET /online-peers
+    participant A as Alice
+    participant B as Bob
+    participant S as VPN server
+    
+    A->>S: GET /online-peers
     S->>A: 200 [alice_key]
     A->>S: GET /online-peers
     S->>A: 200 [alice_key]
-    B[Bob]->>S: GET /online-peers
+    B->>S: GET /online-peers
     S->>B: 200 [alice_key, bob_key]
     
     A->>S: GET /online-peers
