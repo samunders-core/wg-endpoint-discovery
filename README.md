@@ -3,9 +3,9 @@
 ```mermaid
 sequenceDiagram
     participant A as Alice
-    participant B as Bob
     participant S as VPN server
-    
+    participant B as Bob
+
     A->>S: GET /online-peers
     S->>A: 200 [alice_key]
     A->>S: GET /online-peers
