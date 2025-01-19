@@ -266,6 +266,14 @@ end
 
 --SetLogLevel(kLogDebug)
 fm.setRoute({ "/statusz", method = "GET" }, function(r) return ServeStatusz() or "" end)
+fm.setRoute({ "/config", method = "GET" }, fm.serveContent(
+	"cgi",
+	GetHostOs() == "WINDOWS" and {
+		[[c:\windows\system32\cmd.exe]], "for /f %%x in ('%s show interfaces') do %s showconf %%x" % { wg, wg }
+	} or {
+		"/bin/sh", "-c", "%s showconf $(%s show interfaces) | sed -re '/PrivateKey/s|=.*|= <REDACTED>|'" % { wg, wg }
+	}
+))
 --[[fm.setRoute("/sse", log.serve_sse)
 fm.setRoute("/*", function(r)
 	return [[
