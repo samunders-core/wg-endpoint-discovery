@@ -59,7 +59,7 @@ Every peer needs unique last component in address (from range 2 to 254, both inc
     Address = 192.168.7.1
     ListenPort = 51820
     PrivateKey = <REDACTED>
-    PostUp = /etc/wireguard/redbean.com -d -l 192.168.7.1 192.168.7.1
+    PostUp = /etc/wireguard/redbean.com -X -d -l 192.168.7.1 192.168.7.1
     PostDown = /usr/bin/pkill -f 'ape.* /etc/wireguard/redbean.com' &
 
     [Peer]
@@ -75,7 +75,7 @@ Every peer needs unique last component in address (from range 2 to 254, both inc
     Address = 192.168.7.5
     PrivateKey = <REDACTED>
     # everything below is common for all Windows peers
-    PostUp = C:\Windows\System32\redbean.com -d -l 192.168.7.5 192.168.7.1
+    PostUp = C:\Windows\System32\redbean.com -X -d -l 192.168.7.5 192.168.7.1
     PostDown = C:\Windows\System32\redbean.com terminate
 
     [Peer]
@@ -87,10 +87,10 @@ Every peer needs unique last component in address (from range 2 to 254, both inc
 ## Linux Peer
 
     [Interface]
-    Address = 192.168.7.5
+    Address = 192.168.7.4
     PrivateKey = <REDACTED>
     # everything below is common for all Linux peers
-    PostUp = /etc/wireguard/redbean.com -d -l 192.168.7.5 192.168.7.1
+    PostUp = /etc/wireguard/redbean.com -X -d -l 192.168.7.4 192.168.7.1
     PostDown = /usr/bin/pkill -f 'ape.* /etc/wireguard/redbean.com' || true
 
     [Peer]
