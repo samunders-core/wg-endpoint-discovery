@@ -2,7 +2,30 @@ local system = {}
 system._DESCRIPTION = 'Utility functions extracting runtime environment properties'
 
 local inspect = require "inspect"
+local lines = require "lines"
 local log = require "log"
+
+function system.env(name, default)
+	for _, var in ipairs(unix.environ()) do
+		if var:sub(1, #name + 1) == name .. "=" then
+			return var:sub(#name + 2)
+		end
+	end
+	return default
+end
+
+function system.home_dir()
+	result = system.env("HOME")
+	if not result then
+		result = lines(GetHostOs() == "WINDOWS" and "FIXME" or "id -nu %s" % { unix.getuid() })
+		if #result > 0 then
+			result = (GetHostOs() == "WINDOWS" and "/C/Users/%s" or "/home/%s") % result
+		end
+		log(result.failure and kLogError or kLogDebug, result.failure or result)
+		result = not result.failure and result or nil
+	end
+	return result
+end
 
 function system.network_adapter(address)
 	local with_address = type(address) == "table" and address.with or address
@@ -26,15 +49,7 @@ function system.network_adapter(address)
 end
 
 function system.pid_dir()
-	if GetHostOs() ~= "WINDOWS" then
-		return "/run"
-	end
-	for _, var in ipairs(unix.environ()) do
-		if var:sub(1, 8) == "APPDATA=" then
-			return var:sub(9)
-		end
-	end
-	return "/C/Windows"
+	return GetHostOs() ~= "WINDOWS" and "/run" or system.env("APPDATA", "/C/Windows")
 end
 
 function system.system(cmd)

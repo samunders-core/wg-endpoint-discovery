@@ -32,7 +32,7 @@ lookup() { # [awk_options] regex [regex ...]; like grep, but prints all first ma
 after() {
     kill %1 || true
     pkill -INT -f 'redbean.com -X' || true
-    rm -f ape chmod mkdir mv wg
+    rm -f ape chmod mkdir mv redbean.counts.sqlite3* wg
 }
 
 it_requires_manager_address_as_argument() {
@@ -40,47 +40,69 @@ it_requires_manager_address_as_argument() {
     echo "$OUTPUT" | lookup "Malformed manager address provided as first argument: "
 }
 
-#it_accepts_port_as_optional_second_argument() {
-#    false
-#}
-
 it_requires_wireguard_installation() {
     ! OUTPUT="$(env --ignore-environment "PATH=$(pwd)" /usr/bin/timeout 3 ./redbean.com -X 127.0.0.1 < /dev/null 2>&1)"
     echo "$OUTPUT" | lookup "commandv[(][)] failed: No such file or directory 'wg'" 
 }
 
-it_serves_status_as_key_and_numeric_value_pairs() {
+start_peer() {
+  PATH=$(pwd) ./redbean.com -X -l "$1" 127.0.0.1 &
+  sleep 1
+  kill -0 $!    
+}
+
+mock_peers() {
+    tee wg > /dev/null <<'EOF' && chmod +x "$_"
+        #!/bin/sh
+        [ "$*" = "show interfaces" ] && echo "vpn1" && exit 0
+        [ ! "$*" = "show all dump" ] && echo "Not implemented: $0 $*" >&2 && exit 1
+        echo 'vpn1	private_key	manager_public_key	1234	off'
+        echo 'vpn1	offline_peer_public_key	(none)	(none)	127.0.0.42/32	42	0	0	13'
+        echo 'vpn1	online_peer_public_key1	(none)	9.8.7.6:1234	127.0.0.1/32	1731099015	9351784	3698984	13'
+        echo 'vpn1	online_peer_public_key2	(none)	9.8.7.6:2345	127.0.0.66/32	1731099015	9351784	3698984	13'
+EOF
+    DB_PATH=./redbean.counts.sqlite3.manager start_peer 127.0.0.1
+    DB_PATH=./redbean.counts.sqlite3.online_peer start_peer 127.0.0.66
+}
+
+it_excludes_itself_from_served_peers() {
+    mock_peers
+    OUTPUT="$(curl http://127.0.0.1:8080/other-online-peers)"
+    [ "$OUTPUT" = '[{"allowed_ips":"127.0.0.66\/32","endpoint":"9.8.7.6:2345","pubkey":"online_peer_public_key2"}]' ]
+    
+    OUTPUT="$(curl http://127.0.0.66:8080/other-online-peers)"
+    [ "$OUTPUT" = '[]' ]
+}
+
+it_serves_healthcheck_as_number_of_invocations() {
     ln -s /bin/false wg
-    PATH=$(pwd) ./redbean.com -X 127.0.0.1 &
-    sleep 1
-    OUTPUT="$(curl http://localhost:8080/statusz)"
-    [ -n "$OUTPUT" ]
-    echo "$OUTPUT" | awk '/^$/{next} $1 !~ /[0-9a-zA-Z_.]+:/ || $2 !~ /[0-9]+/{f=NR} END{exit f}'
+    start_peer 127.0.0.1
+    OUTPUT="$(curl http://localhost:8080/healthcheck)"
+    [ "$OUTPUT" = '{"count":1}' ]
 }
 
 mock_wg_show_interfaces_and_showconf() {
-    (
-        echo '#!/bin/sh'
-        echo '[ "$*" = "show interfaces" ] && echo "vpn1" && exit 0'
-        echo '[ ! "$*" = "showconf vpn1" ] && echo "Not implemented: $0 $*" >&2 && exit 1'
-        echo "echo '[Interface]'"
-        echo "echo 'ListenPort = 35869'"
-        echo "echo 'PrivateKey = private_key'"
-        echo "echo ''"
-        echo "echo '[Peer]'"
-        echo "echo 'PublicKey = manager_public_key'"
-        echo "echo 'AllowedIPs = 10.10.10.1/24'"
-        echo "echo 'Endpoint = 9.8.7.6:1234'"
-        echo "echo 'PersistentKeepalive = 13'"
-    ) > wg
-    chmod +x wg
-    PATH=$(pwd) ./redbean.com -X --strace 127.0.0.1 &
-    sleep 1
-    kill -0 $!
+    tee wg > /dev/null <<'EOF' && chmod +x "$_"
+        #!/bin/sh
+        [ "$*" = "show interfaces" ] && echo "vpn1" && exit 0
+        [ ! "$*" = "showconf vpn1" ] && echo "Not implemented: $0 $*" >&2 && exit 1
+        cat <<'CFG'
+        [Interface]
+        ListenPort = 35869
+        PrivateKey = private_key
+        
+        [Peer]
+        PublicKey = manager_public_key
+        AllowedIPs = 10.10.10.1/24
+        Endpoint = 9.8.7.6:1234
+        PersistentKeepalive = 13
+        CFG
+EOF
 }
 
 it_serves_config_with_redacted_private_key() {
     mock_wg_show_interfaces_and_showconf
+    start_peer 127.0.0.1
     curl http://localhost:8080/config | cat -n | lookup \
         '1[[:space:]]+[[]Interface[]]' \
         '2[[:space:]]+ListenPort = 35869' \

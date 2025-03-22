@@ -4,62 +4,40 @@ before() {
     for app in ape chmod mkdir mv; do
       ln -fs /bin/$app "$(pwd)"
     done
-}
-
-lookup() {	# regex; like grep, but prints first match on success, everything when failed
-    awk -v "PATT=$*" '$0 ~ PATT {found=1;lines=$0;exit} lines {lines=lines""RS""$0;next} {lines=$0} END {printf(lines);exit(1-found)}'
+    tee wg > /dev/null <<'EOF' && chmod +x "$_"
+        #!/bin/sh
+        [ "$*" = "show interfaces" ] && echo "vpn1" && exit 0
+        [ ! "$*" = "show all dump" ] && echo "Not implemented: $0 $*" >&2 && exit 1
+        echo 'vpn1	private_key	manager_public_key	1234	off'
+        echo 'vpn1	offline_peer_public_key	(none)	(none)	127.0.0.42/32	42	0	0	13'
+        echo 'vpn1	online_peer_public_key1	(none)	9.8.7.6:1234	127.0.0.1/32	1731099015	9351784	3698984	13'
+        echo 'vpn1	online_peer_public_key2	(none)	9.8.7.6:2345	127.0.0.66/32	1731099015	9351784	3698984	13'
+EOF
 }
 
 after() {
     kill %1 || true
-    pkill -INT -f 'redbean.com 127.0.0.1' || true
-    rm -f ape chmod mkdir mv wg
+    pkill -INT -f 'redbean.com -X -l 127.' || true
+    rm -f ape chmod mkdir mv redbean.counts.sqlite3* wg
 }
 
-mock_online_peers() {
-    (
-        echo '#!/bin/sh'
-        echo '[ ! "$*" = "show all dump" ] && echo "Not implemented: $0 $*" >&2 && exit 1'
-        echo "echo 'vpn1	private_key	manager_public_key	1234	off'"
-        echo "echo 'vpn1	offline_peer_public_key	(none)	(none)	10.10.10.1/32	42	0	0	13'"
-        echo "echo 'vpn1	online_peer_public_key	(none)	9.8.7.6:1234	10.10.10.2/32	1731099015	9351784	3698984	13'"
-    ) > wg
-    chmod +x wg
-    PATH=$(pwd) ./redbean.com 127.0.0.1 &
-    sleep 1
-    kill -0 $!
+start_peer() {
+  PATH=$(pwd) ./redbean.com -X -l "$1" 127.0.0.1 &
+  sleep 1
+  kill -0 $!    
 }
 
-it_excludes_itself_from_served_online_peers() {
-    mock_online_peers
-    OUTPUT="$(curl http://localhost:8080/online-peers)"
-    [ "$OUTPUT" = "online_peer_public_key" ]
-    OUTPUT="$(curl -H 'Accept: application/json' http://localhost:8080/online-peers)"
-    [ "$OUTPUT" = '["online_peer_public_key"]' ]
-}
+it_relays_failure_notification() {
+    DB_PATH=./redbean.counts.sqlite3.manager start_peer 127.0.0.1
+    DB_PATH=./redbean.counts.sqlite3.online_peer start_peer 127.0.0.66
+    OUTPUT="$(curl -d '' http://127.0.0.1:8080/notify/127.0.0.66)"  # A=curl -> B=127.0.0.1 -> C=127.0.0.66
+    [ "$OUTPUT" = '{"count":1}' ]
 
-it_serves_endpoint() {
-    (
-        echo '#!/bin/sh'
-        echo '[ ! "$*" = "show all dump" ] && echo "Not implemented: $0 $*" >&2 && exit 1'
-        echo "echo 'vpn1	private_key	manager_public_key	1234	off'"
-        echo "echo 'vpn1	offline_peer_public_key	(none)	(none)	10.10.10.1/32	42	0	0	13'"
-        echo "echo 'vpn1	online_peer_public_key	(none)	9.8.7.6:1234	10.10.10.2/32	1731099015	9351784	3698984	13'"
-    ) > wg
-    chmod +x wg
-    PATH=$(pwd) ./redbean.com 127.0.0.1 &
-    sleep 1
-    OUTPUT="$(curl http://localhost:8080/endpoint/manager_public_key)"
-    [ "$OUTPUT" = "$(ip -o route get 1.1.1.1 | awk '{print $7}'):1234" ]
-    OUTPUT="$(curl -H 'Accept: application/json' http://localhost:8080/endpoint/manager_public_key)"
-    [ "$OUTPUT" = '{"endpoint":"'"$(ip -o route get 1.1.1.1 | awk '{print $7}'):1234"'"}' ]
-    OUTPUT="$(curl http://localhost:8080/endpoint/offline_peer_public_key)"
-    echo "$OUTPUT" | lookup "404 Peer not seen yet"
-    OUTPUT="$(curl -H 'Accept: application/json' http://localhost:8080/endpoint/offline_peer_public_key)"
-    echo "$OUTPUT" | lookup '{"error":"Peer not seen yet"}'
-    OUTPUT="$(curl http://localhost:8080/endpoint/online_peer_public_key)"
-    [ "$OUTPUT" = "9.8.7.6:1234 allowed-ips 10.10.10.2/32 # latest-handshake=1731099015" ]
-    OUTPUT="$(curl -H 'Accept: application/json' http://localhost:8080/endpoint/online_peer_public_key)"
-    [ "$OUTPUT" = '{"allowed_ips":"10.10.10.2/32","endpoint":"9.8.7.6:1234","hands_shaken_at":"1731099015"}' ]
+    OUTPUT="$(curl -d '' http://127.0.0.66:8080/notify/127.0.0.42)"  # A=curl -> B=127.0.0.66 -> C=127.0.0.42
+    [ "$OUTPUT" = '{"error":"Fetch(http:\/\/127.0.0.42:8080\/failed\/127.0.0.1) failed: connect(127.0.0.42:8080) error: Connection refused"}' ]
+
+    DB_PATH=./redbean.counts.sqlite3.offline_peer start_peer 127.0.0.42
+    OUTPUT="$(curl -d '' http://127.0.0.66:8080/notify/127.0.0.42)"  # A=curl -> B=127.0.0.66 -> C=127.0.0.42
+    [ "$OUTPUT" = '{"count":1}' ]
 }
 

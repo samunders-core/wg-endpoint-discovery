@@ -1,10 +1,16 @@
 #!/usr/bin/env roundup
 
+mksymlinks() {  # dir name ...
+    DIR="$1" && shift
+    mkdir -p "$DIR"
+    for app in "$@"; do
+      ln -fs /bin/$app "$DIR"
+    done
+}
+
 before() {
     # for app in ape awk basename chmod cut egrep grep head mkdir mv sed tr xdg-mime xdg-open; do
-    for app in ape chmod mkdir mv; do
-      ln -fs /bin/$app "$(pwd)"
-    done
+    mksymlinks "$(pwd)" ape chmod mkdir mv
     (
         echo '#!/bin/sh'
         echo 'echo "Default browser: opening $*" >&2'
@@ -38,96 +44,98 @@ lookup() { # [awk_options] regex [regex ...]; like grep, but prints all first ma
 after() {
     kill %1 || true
     pkill -INT -f 'redbean.com -X' || true
-    rm -rf ape chmod ip manager mkdir mv wg xdg-open
+    rm -rf ape chmod ip manager mkdir mv peer redbean.counts.sqlite3* wg xdg-open
 }
 
-mock_manager_and_online_peer() {
-    mkdir -p manager
-    for app in ape chmod mkdir mv; do
-      ln -fs /bin/$app "$(pwd)/manager"
-    done
-    (
-        echo '#!/bin/sh'
-        echo '[ ! "$*" = "show all dump" ] && echo "Not implemented: $0 $*" >&2 && exit 1'
-        echo "echo 'vpn1	private_key	manager_public_key	1234	off'"
-        echo "echo 'vpn1	offline_peer_public_key	(none)	(none)	10.10.10.1/32	42	0	0	13'"
-        echo "echo 'vpn1	online_peer_public_key	(none)	9.8.7.6:1234	127.0.0.27/32	1731099015	9351784	3698984	13'"
-    ) > manager/wg  # for test purposes allowed ips of online peer points to manager; there should be 127.0.0.1 but that's where peer is bound and X-Client-Address would cause it to be ignored
-    chmod +x manager/wg
-    PATH="$(pwd)/manager" ./redbean.com -X -l 127.0.0.1 -l 127.0.0.27 127.0.0.1 2>&1 | sed -re 's/^/MANAGER /' &
-    sleep 1
-    kill -0 $!
+start_peer() {  # bind_address name
+  NAME="$1" && shift
+  env DB_PATH=./redbean.counts.sqlite3.$NAME PATH="${WITH_PATH:-$(pwd)}" ./redbean.com -X "$@" 2>&1 | sed -re "s/^/$NAME /" &
+  sleep 1
+  kill -0 $!    
+}
+
+start_manager() {
+    mksymlinks "$(pwd)/manager" ape chmod mkdir mv
+    tee manager/wg > /dev/null <<'EOF' && chmod +x "$_"
+        #!/bin/sh
+        [ "$*" = "show interfaces" ] && echo "vpn1" && exit 0
+        [ ! "$*" = "show all dump" ] && echo "Not implemented: $0 $*" >&2 && exit 1
+        echo 'vpn1	private_key	manager_public_key	1234	off'
+        echo 'vpn1	offline_peer_public_key	(none)	(none)	10.10.10.1/32	42	0	0	13'
+        echo 'vpn1	online_peer_public_key	(none)	9.8.7.6:1234	127.0.0.27/32	1731099015	9351784	3698984	13'
+EOF
+    WITH_PATH="$(pwd)/manager" start_peer MANAGER -l 127.0.0.254 -l 127.0.0.1 "$@" 127.0.0.1
 } 
  
 mock_wg_show_interfaces_and_set_peer() {
-    (
-        echo '#!/bin/sh'
-        echo '[ "$*" = "show interfaces" ] && echo "vpn1" && exit 0'
-        echo '[ "$*" = "set vpn1 peer online_peer_public_key persistent-keepalive 13 endpoint 9.8.7.6:1234 allowed-ips 127.0.0.27/32" ] && exit 0'
-        echo '[ ! "$*" = "show vpn1 transfer" ] && echo "Not implemented: $0 $*" >&2 && exit 1'
-        echo "echo 'offline_peer_public_key	0	1332'"
-        echo "echo 'online_peer_public_key	9351784	3698984'"
-    ) > wg
-    chmod +x wg
+    tee wg > /dev/null <<'EOF' && chmod +x "$_"
+        #!/bin/sh
+        [ "$*" = "show interfaces" ] && echo "vpn1" && exit 0
+        [ "$*" = "set vpn1 peer online_peer_public_key persistent-keepalive 13 endpoint 9.8.7.6:1234 allowed-ips 127.0.0.27/32" ] && exit 0
+        [ "$*" = "show vpn1 transfer" ] && echo -e 'offline_peer_public_key	0	1332\nonline_peer_public_key	9351784	3698984' && exit 0
+        [ ! "$*" = "show all dump" ] && echo "Not implemented: $0 $*" >&2 && exit 1
+        echo 'vpn1	private_key	manager_public_key	1234	off'
+        echo 'vpn1	offline_peer_public_key	(none)	(none)	127.0.0.99/32	42	0	0	13'
+        echo 'vpn1	online_peer_public_key	(none)	9.8.7.6:1234	127.0.0.27/32	1731099015	9351784	3698984	13'
+EOF
 }
 
 mock_ip_route_replace() {
-    (
-        echo '#!/bin/sh'
-        echo '[ ! "$*" = "route replace 127.0.0.27 dev lo scope link" ] && echo "Not implemented: $0 $*" >&2 && exit 1'
-        echo "exit 0"
-    ) > ip
-    chmod +x ip
+    tee ip > /dev/null <<'EOF' && chmod +x "$_"
+        #!/bin/sh
+        [ ! "$*" = "route replace 127.0.0.27 dev lo scope link" ] && echo "Not implemented: $0 $*" >&2 && exit 1
+        exit 0
+EOF
+}
+
+it_pings_peers_on_heartbeat() {
+    start_manager
+    mock_wg_show_interfaces_and_set_peer
+    start_peer ONLINE_PEER -l 127.0.0.27 127.0.0.254
+    mock_ip_route_replace
+    timeout 3 env PATH="$(pwd)" HEARTBEAT_SECONDS=1 ./redbean.com -X -l 127.0.0.42 127.0.0.254 2>&1 | sed -re 's/^/PEER /' | lookup \
+      '9351784 bytes received, 3698984 bytes sent' \
+      'Fetch[(]http://127.0.0.27:8080/healthcheck) 200: [{]"count":1}' \
+      '9351784 bytes received, 3698984 bytes sent' \
+      'Fetch[(]http://127.0.0.27:8080/healthcheck) 200: [{]"count":2}' \
+      '9351784 bytes received, 3698984 bytes sent' \
+      'Fetch[(]http://127.0.0.27:8080/healthcheck) 200: [{]"count":3}'
 }
 
 mock_online_peer() {
-    mkdir -p peer
-    for app in ape chmod mkdir mv; do
-      ln -fs /bin/$app "$(pwd)/peer"
-    done
-    (
-        echo '#!/bin/sh'
-        echo 'echo "Not implemented: $0 $*" >&2 && exit 1'
-    ) > peer/wg
-    chmod +x peer/wg
-    PATH="$(pwd)/peer" ./redbean.com -X 127.0.0.27 2>&1 | sed -re 's/^/ONLINE_PEER /' &
-    sleep 1
-    kill -0 $!
+    mksymlinks "$(pwd)/peer" ape chmod mkdir mv
+    tee peer/wg > /dev/null <<'EOF' && chmod +x "$_"
+        #!/bin/sh
+        [ "$*" = "show interfaces" ] && echo "vpn1" && exit 0
+        echo "Not implemented: $0 $*" >&2 && exit 1
+EOF
+    WITH_PATH="$(pwd)/peer" start_peer ONLINE_PEER -l 127.0.0.27 127.0.0.254
 }
 
-mock_wg_show_all_dump() {
-    (
-        echo '#!/bin/sh'
-        echo '[ ! "$*" = "show all dump" ] && echo "Not implemented: $0 $*" >&2 && exit 1'
-        echo "echo 'vpn1	private_key	manager_public_key	1234	off'"
-        echo "echo 'vpn1	offline_peer_public_key	(none)	(none)	10.10.10.1/32	42	0	0	13'"
-        echo "echo 'vpn1	online_peer_public_key	(none)	9.8.7.6:1234	127.0.0.27/32	1731099015	9351784	3698984	13'"
-    ) > wg
-    chmod +x wg
-}
-
-it_pings_peers_on_heartbeat() { 
-    mock_manager_and_online_peer
+it_pings_all_local_known_peers_even_after_manager_goes_offline() {
+    start_manager \
+      -e 'unix.sigaction(unix.SIGALRM, unix.exit, unix.SA_RESETHAND)' \
+      -e 'unix.setitimer(unix.ITIMER_REAL, 0, 0, 3, 0)'  # 3-seconds delayed exit
     mock_wg_show_interfaces_and_set_peer
+    start_peer ONLINE_PEER -l 127.0.0.27 127.0.0.254
     mock_ip_route_replace
-    timeout 3 env PATH="$(pwd)" ./redbean.com -X -p 9090 127.0.0.27 8080 1000 2>&1 | sed -re 's/^/PEER /' | lookup \
+    timeout 3 env PATH="$(pwd)" HEARTBEAT_SECONDS=1 ./redbean.com -X -l 127.0.0.42 127.0.0.254 2>&1 | sed -re 's/^/PEER /' | lookup \
       '9351784 bytes received, 3698984 bytes sent' \
-      'Fetch[(]http://127[.]0[.]0[.]27:8080/statusz[)] 200: pid:.*statuszrequests: 1' \
-      '9351784 bytes received, 3698984 bytes sent' \
-      'Fetch[(]http://127[.]0[.]0[.]27:8080/statusz[)] 200: pid:.*statuszrequests: 2' \
-      '9351784 bytes received, 3698984 bytes sent' \
-      'Fetch[(]http://127[.]0[.]0[.]27:8080/statusz[)] 200: pid:.*statuszrequests: 3'
+      'Fetch[(]http://127.0.0.27:8080/healthcheck) 200: [{]"count":1}' \
+      'Fetch[(]http://127.0.0.254:8080/other-online-peers) failed: connect[(]127.0.0.254:8080) error: Connection refused' \
+      'Fetch[(]http://127.0.0.99:8080/healthcheck) failed: connect[(]127.0.0.99:8080) error: Connection refused' \
+      'Fetch[(]http://127.0.0.27:8080/healthcheck) 200: [{]"count":2}' \
+      'Fetch[(]http://127.0.0.254:8080/other-online-peers) failed: connect[(]127.0.0.254:8080) error: Connection refused' \
+      'Fetch[(]http://127.0.0.99:8080/healthcheck) failed: connect[(]127.0.0.99:8080) error: Connection refused' \
+      'Fetch[(]http://127.0.0.27:8080/healthcheck) 200: [{]"count":3}' \
+      'Fetch[(]http://127.0.0.254:8080/other-online-peers) failed: connect[(]127.0.0.254:8080) error: Connection refused' \
+      'Fetch[(]http://127.0.0.99:8080/healthcheck) failed: connect[(]127.0.0.99:8080) error: Connection refused'
 }
 
-it_pings_peers_even_after_manager_goes_offline() {
-    return  # FIXME: fetch_endpoint
-    mock_online_peer
-    mock_wg_show_all_dump
-    timeout 3 env PATH="$(pwd)" ./redbean.com -X -p 9090 127.0.0.27 8080 1000 2>&1 | sed -re 's/^/PEER /' | lookup \
-      '9351784 bytes received, 3698984 bytes sent' \
-      'Fetch[(]http://127[.]0[.]0[.]27:8080/statusz[)] 200: pid:.*statuszrequests: 1' \
-      '9351784 bytes received, 3698984 bytes sent' \
-      'Fetch[(]http://127[.]0[.]0[.]27:8080/statusz[)] 200: pid:.*statuszrequests: 2' \
-      '9351784 bytes received, 3698984 bytes sent' \
-      'Fetch[(]http://127[.]0[.]0[.]27:8080/statusz[)] 200: pid:.*statuszrequests: 3'
-}
+# it_accepts_anything_to_allow_vpn_restarts_as_optional_second_argument() {
+#     false
+# }
+
+# it_restarts_windows_vpn_client_upon_repeated_ping_failure() {
+#     false
+# }

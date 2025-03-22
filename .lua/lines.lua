@@ -4,11 +4,14 @@ lines._DESCRIPTION = 'Slurp command output lines into table'
 local log = require "log"
 
 function lines.popen(cmd)
+  -- TODO: execute pipeline if cmd is table
   local fd, msg = io.popen(cmd, "r")
   local result = {}
   if fd then
-    for line in fd:lines() do
-      line, _ = line:gsub("\r", "")
+    for line in fd:lines("l") do
+      if line[#line] == '\r' then
+        line = line:substring(1, #line - 1)
+      end
       table.insert(result, line)
     end
     local success, exitcode, code = fd:close()
