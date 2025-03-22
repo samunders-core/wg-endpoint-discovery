@@ -16,7 +16,9 @@ sequenceDiagram
     
     B->>S: GET /other-online-peers
     S->>B: 200 [{"pubkey":"alice_key", "endpoint":"alice_ip_address:port_X", "allowed_ips":"address/bitmask"}]
-    
+    Note over B: wg set vpn1 peer alice_key persistent-keepalive 13 endpoint alice_ip_address:port_X allowed-ips address/bitmask
+    Note over B: netsh advfirewall firewall add rule name=redbean_healthcheck protocol=tcp dir=in localip=bob_ip_address localport=8080 action=allow
+
     loop every 13 seconds
         A->>S: GET /other-online-peers
         S->>A: 200 [{"pubkey":"bob_key", "endpoint":"bob_ip_address:port_1", "allowed_ips":"address/bitmask"}]
