@@ -236,10 +236,23 @@ function get_online_peers(address) -- every HEARTBEAT_SECONDS, already in child 
 	return online_peers, error_or_headers["X-Client-Address"]
 end
 
+function ping(gateway, peer)
+	local status, headers = fetch(peer["allowed_ips"]:gsub("/%d+", ""), "healthcheck")
+	if gateway then
+		if not status or status ~= 200 then
+			local notify_address = fm.makePath("/notify/:address", { address = peer["allowed_ips"]:gsub("/%d+", "") })
+			fetch(gateway, notify_address, "POST")
+		end
+		return gateway
+	end
+	return status == 200 and peer["allowed_ips"]:gsub("/%d+", "")
+end
+
 function OnServerHeartbeat() -- every HEARTBEAT_SECONDS, already in child process
 	local gateway = FormatIp(manager_address)
-	local online_peers, local_address = get_online_peers(FormatIp(manager_address))
+	local online_peers, local_address = get_online_peers(gateway)
 	if not local_address then
+		gateway = nil
 		local output = lines(wg_show_all_dump)
 		for _, line in ipairs(output) do
 			candidate = peer(line, function(received) return true end)
@@ -255,15 +268,10 @@ function OnServerHeartbeat() -- every HEARTBEAT_SECONDS, already in child proces
 		if local_address then
 			add_endpoint_address(peer["pubkey"], peer["endpoint"], peer["allowed_ips"], local_address)
 		end
-		if assert(unix.fork()) == 0 then
-			local status, headers = fetch(peer["allowed_ips"]:gsub("/%d+", ""), "healthcheck")
-			if not local_address then
-				gateway = peer["allowed_ips"]:gsub("/%d+", "")
-				local_address = headers["X-Client-Address"]
-			elseif not status or status ~= 200 then
-				local notify_address = fm.makePath("/notify/:address", { address = local_address })
-				fetch(gateway, notify_address, "POST")
-			end
+		if not gateway then
+			gateway = ping(gateway, peer)
+		elseif assert(unix.fork()) == 0 then
+			ping(gateway, peer)
 			unix.exit(0)
 		end
 	end
@@ -282,7 +290,7 @@ function register_routes()
 	fm.setRoute({ "/config", method = "GET" }, fm.serveContent(
 		"cgi",
 		GetHostOs() == "WINDOWS" and {
-			[[c:\windows\system32\cmd.exe]], "for /f %x in ('"..wg.." show interfaces') do "..wg.." showconf %x"
+			[[c:\windows\system32\cmd.exe]], "for /f %x in ('" .. wg .. " show interfaces') do " .. wg .. " showconf %x"
 		} or {
 			"/bin/sh", "-c", "%s showconf $(%s show interfaces) | sed -re '/PrivateKey/s|=.*|= <REDACTED>|'" % { wg, wg }
 		}
@@ -299,7 +307,7 @@ function register_routes()
 	</ul></body></html>]]
 	--end)
 
-	fm.sessionOptions.secret = false  -- prevent `applied random session secret` log message
+	fm.sessionOptions.secret = false -- prevent `applied random session secret` log message
 	fm.run()
 end
 
@@ -314,11 +322,11 @@ elseif assert(unix.fork()) ~= 0 then
 	OnServerHeartbeat = nil
 	register_routes()
 	--LaunchBrowser("/log")
-else  -- each Fetch blocks until timeout or response
+else -- each Fetch blocks until timeout or response
 	ProgramHeartbeatInterval(tonumber(system.env("HEARTBEAT_SECONDS", "3"), 10) * 1000)
 end
 
 function OnServerListen(socketdescriptor, serverip, serverport)
-	table.insert(ports, tostring(serverport))  -- collect ports given by -p command line switch
+	table.insert(ports, tostring(serverport)) -- collect ports given by -p command line switch
 	return OnServerHeartbeat  -- forks won't listen
 end
