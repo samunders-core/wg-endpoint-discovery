@@ -55,14 +55,12 @@ wg_show_pattern = ("(network+)%s+(peer+)%s+(key+)%s+(endpoint+)%s+(allowed_ips+)
 ports = {}
 network = lines("%s show interfaces" % { wg })[1]
 restart_heartbeats = 3
-
-function OnServerListen(socketdescriptor, serverip, serverport)
-	table.insert(ports, tostring(serverport)) -- collect ports given by -p command line switch
-end
+db_file_path = nil
 
 function makeStorage()
 	for _, dir in ipairs({ path.dirname(unix.realpath(arg[-1])), system.pid_dir(), system.home_dir(), "." }) do
-		local status, db = pcall(fm.makeStorage, system.env("DB_PATH", "%s/redbean.counts.sqlite3" % { dir }), -- :memory: does not work because forks don't share it
+		db_file_path = system.env("DB_PATH", "%s/redbean.counts.sqlite3" % { dir })
+		local status, db = pcall(fm.makeStorage, db_file_path, -- :memory: does not work because forks don't share it
 			[[ CREATE TABLE counts(key TEXT PRIMARY KEY, count INTEGER NOT NULL); ]], {
 				trace = function(_, ...) log(kLogDebug, inspect({ ... })) end
 			}
@@ -76,6 +74,12 @@ function makeStorage()
 end
 
 db = makeStorage()
+
+function OnServerStop()
+	if db_file_path then
+		unix.unlink(db_file_path)
+	end
+end
 
 function peer(line, received_condition)
 	local _, _, network, peer, privkey, endpoint, allowed_ips, hands_shaken_at, received = line:find(
@@ -232,10 +236,7 @@ function get_online_peers(address) -- every HEARTBEAT_SECONDS, already in child 
 	return online_peers, error_or_headers["X-Client-Address"]
 end
 
-function OnServerHeartbeat()      -- every HEARTBEAT_SECONDS
-	if assert(unix.fork()) ~= 0 then -- each Fetch blocks until timeout or response
-		return
-	end
+function OnServerHeartbeat() -- every HEARTBEAT_SECONDS, already in child process
 	local gateway = FormatIp(manager_address)
 	local online_peers, local_address = get_online_peers(FormatIp(manager_address))
 	if not local_address then
@@ -263,6 +264,7 @@ function OnServerHeartbeat()      -- every HEARTBEAT_SECONDS
 				local notify_address = fm.makePath("/notify/:address", { address = local_address })
 				fetch(gateway, notify_address, "POST")
 			end
+			unix.exit(0)
 		end
 	end
 	restart_heartbeats = restart_heartbeats - 1
@@ -272,37 +274,51 @@ function OnServerHeartbeat()      -- every HEARTBEAT_SECONDS
 	end
 end
 
+function register_routes()
+	fm.setRoute({ "/other-online-peers", method = "GET" }, serve_other_online_peers)
+	fm.setRoute({ "/notify/:address", method = "POST" }, serve_notify)
+	fm.setRoute({ "/failed/:address", method = "POST" }, serve_failed)
+	fm.setRoute({ "/healthcheck", method = "GET" }, serve_failed)
+	fm.setRoute({ "/config", method = "GET" }, fm.serveContent(
+		"cgi",
+		GetHostOs() == "WINDOWS" and {
+			[[c:\windows\system32\cmd.exe]], "for /f %x in ('"..wg.." show interfaces') do "..wg.." showconf %x"
+		} or {
+			"/bin/sh", "-c", "%s showconf $(%s show interfaces) | sed -re '/PrivateKey/s|=.*|= <REDACTED>|'" % { wg, wg }
+		}
+	))
+	--[[fm.setRoute("/sse", log.serve_sse)
+	fm.setRoute("/*", function(r)
+		return [[
+	<!DOCTYPE html><html><head>
+	<script src="https://unpkg.com/htmx.org@1.9.11" ></script>
+	<script src="https://unpkg.com/htmx.org@1.9.11/dist/ext/sse.js"></script>
+	</head>
+	<body><h1>Log</h1>
+	<ul id="sse" hx-ext="sse" sse-connect="/sse" sse-swap="message,0,1,2,3,4,5,6" hx-swap="beforeend">
+	</ul></body></html>]]
+	--end)
+
+	fm.sessionOptions.secret = false  -- prevent `applied random session secret` log message
+	fm.run()
+end
+
 SetLogLevel(kLogDebug)
-fm.setRoute({ "/other-online-peers", method = "GET" }, serve_other_online_peers)
-fm.setRoute({ "/notify/:address", method = "POST" }, serve_notify)
-fm.setRoute({ "/failed/:address", method = "POST" }, serve_failed)
-fm.setRoute({ "/healthcheck", method = "GET" }, serve_failed)
-fm.setRoute({ "/config", method = "GET" }, fm.serveContent(
-	"cgi",
-	GetHostOs() == "WINDOWS" and {
-		[[c:\windows\system32\cmd.exe]], "for /f %x in ('%s show interfaces') do %s showconf %x" % { wg, wg }
-	} or {
-		"/bin/sh", "-c", "%s showconf $(%s show interfaces) | sed -re '/PrivateKey/s|=.*|= <REDACTED>|'" % { wg, wg }
-	}
-))
---[[fm.setRoute("/sse", log.serve_sse)
-fm.setRoute("/*", function(r)
-	return [[
-<!DOCTYPE html><html><head>
-<script src="https://unpkg.com/htmx.org@1.9.11" ></script>
-<script src="https://unpkg.com/htmx.org@1.9.11/dist/ext/sse.js"></script>
-</head>
-<body><h1>Log</h1>
-<ul id="sse" hx-ext="sse" sse-connect="/sse" sse-swap="message,0,1,2,3,4,5,6" hx-swap="beforeend">
-</ul></body></html>]]
---end)
 
 if (system.network_adapter { with = manager_address }).ip then
 	log(kLogInfo, "Manager at %s needs no heartbeat handler, clearing it" % { FormatIp(manager_address) })
 	OnServerHeartbeat = nil
-else
-	ProgramHeartbeatInterval(tonumber(system.env("HEARTBEAT_SECONDS", "3"), 10) * 1000)
+	register_routes()
+elseif assert(unix.fork()) ~= 0 then
+	log(kLogInfo, "Main PID needs no heartbeat handler, clearing it")
+	OnServerHeartbeat = nil
+	register_routes()
 	--LaunchBrowser("/log")
+else  -- each Fetch blocks until timeout or response
+	ProgramHeartbeatInterval(tonumber(system.env("HEARTBEAT_SECONDS", "3"), 10) * 1000)
 end
 
-fm.run()
+function OnServerListen(socketdescriptor, serverip, serverport)
+	table.insert(ports, tostring(serverport))  -- collect ports given by -p command line switch
+	return OnServerHeartbeat  -- forks won't listen
+end

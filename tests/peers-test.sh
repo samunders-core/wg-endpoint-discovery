@@ -127,9 +127,7 @@ it_pings_all_local_known_peers_even_after_manager_goes_offline() {
       'Fetch[(]http://127.0.0.27:8080/healthcheck) 200: [{]"count":2}' \
       'Fetch[(]http://127.0.0.254:8080/other-online-peers) failed: connect[(]127.0.0.254:8080) error: Connection refused' \
       'Fetch[(]http://127.0.0.99:8080/healthcheck) failed: connect[(]127.0.0.99:8080) error: Connection refused' \
-      'Fetch[(]http://127.0.0.27:8080/healthcheck) 200: [{]"count":3}' \
-      'Fetch[(]http://127.0.0.254:8080/other-online-peers) failed: connect[(]127.0.0.254:8080) error: Connection refused' \
-      'Fetch[(]http://127.0.0.99:8080/healthcheck) failed: connect[(]127.0.0.99:8080) error: Connection refused'
+      'Fetch[(]http://127.0.0.27:8080/healthcheck) 200: [{]"count":3}'
 }
 
 # it_accepts_anything_to_allow_vpn_restarts_as_optional_second_argument() {

@@ -17,9 +17,13 @@ end
 function system.home_dir()
 	result = system.env("HOME")
 	if not result then
-		result = lines(GetHostOs() == "WINDOWS" and "FIXME" or "id -nu %s" % { unix.getuid() })
+		user = system.env(GetHostOs() == "WINDOWS" and "USERNAME" or "USER")
+		if user then
+			return (GetHostOs() == "WINDOWS" and "/C/Users/%s" or "/home/%s") % { user }
+		end
+		result = lines(GetHostOs() == "WINDOWS" and "whoami" or "id -nu %s" % { unix.getuid() })
 		if #result > 0 then
-			result = (GetHostOs() == "WINDOWS" and "/C/Users/%s" or "/home/%s") % result
+			result = (GetHostOs() == "WINDOWS" and "/C/Users/%s" or "/home/%s") % result:gsub("^.*\\", "")
 		end
 		log(result.failure and kLogError or kLogDebug, result.failure or result)
 		result = not result.failure and result or nil
