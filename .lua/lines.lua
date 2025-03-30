@@ -9,8 +9,8 @@ function lines.popen(cmd)
   local result = {}
   if fd then
     for line in fd:lines("l") do
-      if line[#line] == '\r' then
-        line = line:substring(1, #line - 1)
+      if line:sub(#line) == '\r' then
+        line = line:sub(1, #line - 1)
       end
       table.insert(result, line)
     end

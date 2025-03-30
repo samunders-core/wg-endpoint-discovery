@@ -54,6 +54,9 @@ wg_show_pattern = ("(network+)%s+(peer+)%s+(key+)%s+(endpoint+)%s+(allowed_ips+)
 	:gsub("[_%w][_%w]+", "%%S")
 ports = {}
 network = lines("%s show interfaces" % { wg })[1]
+if network:sub(#network) == '\r' then
+    network = network:sub(1, #network - 1)
+end
 restart_heartbeats = 3
 db_file_path = nil
 
@@ -61,7 +64,7 @@ function makeStorage()
 	for _, dir in ipairs({ path.dirname(unix.realpath(arg[-1])), system.pid_dir(), system.home_dir(), "." }) do
 		db_file_path = system.env("DB_PATH", "%s/redbean.counts.sqlite3" % { dir })
 		local status, db = pcall(fm.makeStorage, db_file_path, -- :memory: does not work because forks don't share it
-			[[ CREATE TABLE counts(key TEXT PRIMARY KEY, count INTEGER NOT NULL); ]], {
+			[[ CREATE TABLE IF NOT EXISTS counts(key TEXT PRIMARY KEY, count INTEGER NOT NULL); ]], {
 				trace = function(_, ...) log(kLogDebug, inspect({ ... })) end
 			}
 		)
@@ -162,7 +165,7 @@ function restart_vpn()
 	elseif not row["count"] or row["count"] < 3 or not arg[2] then
 		return
 	elseif GetHostOs() == "WINDOWS" then -- we're in grandchild of restarted process
-		log(kLogWarn, "Ping from %s failed %s times, restating VPN client" % { row["address"], row["count"] })
+		log(kLogWarn, "Ping from %s failed %s times, restating VPN client" % { row["key"], row["count"] })
 		system(
 			[[schtasks /create /tn "Restart wg" /tr '%s -command "Restart-Service %s -Force"' /sc once /st 00:00:03 /ru "SYSTEM"]]
 			% { which("powershell"), "WireGuardTunnel$my-tunnel" }
@@ -176,7 +179,7 @@ function restart_vpn()
 	end
 end
 
-function log_transfers(network, pubkey)
+function log_transfers(pubkey)
 	for _, line in ipairs(lines("%s show %s transfer" % { wg, network })) do
 		if line:find(pubkey) then
 			log(kLogInfo, "%s bytes sent" % { line:sub(1 + #pubkey + 1):gsub("%s", " bytes received, ", 1) })
@@ -199,13 +202,13 @@ function add_endpoint_address(pubkey, endpoint, allowed_ips, local_address)
 		system(
 			"%s advfirewall firewall add rule name=redbean_healthcheck protocol=tcp dir=in localip=%s localport=%s action=allow" %
 			{ which("netsh"), local_address, ports[#ports] or "8080" })
-		log_transfers(network, pubkey)
+		log_transfers(pubkey)
 	else
 		adapter = system.network_adapter(local_address)
 		if adapter.ip then
 			system("%s set %s peer %s persistent-keepalive 13 endpoint %s" % { wg, network, pubkey, endpoint })
 			system("%s route replace %s dev %s scope link" % { which("ip"), allowed_ips:gsub("/%d+", ""), adapter.name })
-			log_transfers(network, pubkey)
+			log_transfers(pubkey)
 		end
 	end
 end

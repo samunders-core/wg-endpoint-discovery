@@ -74,8 +74,16 @@ it_excludes_itself_from_served_peers() {
     [ "$OUTPUT" = '[]' ]
 }
 
+mock_wg_show_interfaces() {
+    tee wg > /dev/null <<'EOF' && chmod +x "$_"
+        #!/bin/sh
+        [ ! "$*" = "show interfaces" ] && echo "Not implemented: $0 $*" >&2 && exit 1
+        echo "vpn1"
+EOF
+}
+
 it_serves_healthcheck_as_number_of_invocations() {
-    ln -s /bin/false wg
+    mock_wg_show_interfaces
     start_peer 127.0.0.1
     OUTPUT="$(curl http://localhost:8080/healthcheck)"
     [ "$OUTPUT" = '{"count":1}' ]
