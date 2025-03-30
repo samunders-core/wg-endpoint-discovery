@@ -15,7 +15,7 @@ if manager_address == -1 then
 			system("%s advfirewall firewall delete rule name=redbean_healthcheck" % { which("netsh") })
 			pid = Slurp("%s/redbean.pid" % { system.pid_dir() }) or "-1"
 			log(kLogWarn, "Sending SIGINT to %s" % { pid })
-			unix.kill(tonumber(pid, 10), unix.SIGINT)
+			unix.kill(-tonumber(pid, 10), unix.SIGINT)
 			unix.exit(0)
 		elseif not which("wg", "ignore_not_found") then
 			local status, headers, body = Fetch("https://download.wireguard.com/windows-client/wireguard-installer.exe")
@@ -167,8 +167,8 @@ function restart_vpn()
 	elseif GetHostOs() == "WINDOWS" then -- we're in grandchild of restarted process
 		log(kLogWarn, "Ping from %s failed %s times, restating VPN client" % { row["key"], row["count"] })
 		system(
-			[[schtasks /create /tn "Restart wg" /tr '%s -command "Restart-Service %s -Force"' /sc once /st 00:00:03 /ru "SYSTEM"]]
-			% { which("powershell"), "WireGuardTunnel$my-tunnel" }
+			[[%s /create /tn "Restart wg" /tr '%s -command "Restart-Service WireGuardTunnel$%s -Force"' /sc once /st 00:00:03 /ru "SYSTEM"]]
+			% { which("schtasks"), which("powershell"), network }
 		)
 		-- https://learn.microsoft.com/en-us/windows-server/administration/windows-commands/sc-query
 		--system("Start-Process sc.exe -ArgumentList 'config', 'WireGuardTunnel$my-tunnel', 'start= delayed-auto' -Wait -NoNewWindow -PassThru | Out-Null")
